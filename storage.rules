@@ -1,0 +1,11 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /rooms/{roomId}/{fileName} {
+      // Allow any user to upload a video
+      // They don't need to be authenticated because the video upload 
+      // doesn't have sensitive data and rooms are temporary.
+      allow read, write: if true; 
+    }
+  }
+}

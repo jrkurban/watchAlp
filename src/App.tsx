@@ -4,7 +4,7 @@ import { io, Socket } from 'socket.io-client';
 import { Play, Pause, Link, Users, Video, Copy, Check, Upload, Trash2 } from 'lucide-react';
 import { initAuth, db, storage } from './lib/firebase';
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 
 // Establish socket connection (assumes same host)
 
@@ -31,6 +31,7 @@ export default function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   
   const playerRef = useRef<ReactPlayer>(null);
   const ignoreNextPlayPause = useRef(false);
@@ -158,27 +159,41 @@ export default function App() {
       }
   }
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
+    setUploadProgress(0);
 
-    try {
-      const storageRef = ref(storage, `rooms/${ROOM_ID}/${Date.now()}_${file.name}`);
-      await uploadBytes(storageRef, file);
-      const downloadUrl = await getDownloadURL(storageRef);
-      
-      await updateRoomState(downloadUrl);
-    } catch (error) {
-      console.error('Upload failed:', error);
-      alert('Failed to upload video to Firebase Storage.');
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+    const storageRef = ref(storage, `rooms/${ROOM_ID}/${Date.now()}_${file.name}`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    uploadTask.on('state_changed', 
+      (snapshot) => {
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        setUploadProgress(Math.round(progress));
+      }, 
+      (error) => {
+        console.error('Upload failed:', error);
+        alert(`Failed to upload video: ${error.message}`);
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }, 
+      async () => {
+        try {
+          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+          await updateRoomState(downloadUrl);
+        } catch (error: any) {
+          console.error("Error setting video URL", error);
+          alert(`Failed to finish upload: ${error.message}`);
+        } finally {
+          setIsUploading(false);
+          setUploadProgress(0);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
       }
-    }
+    );
   };
 
   const handleClearVideo = async () => {
@@ -239,31 +254,38 @@ export default function App() {
                 <div className="hidden md:block w-px h-10 bg-stone-200"></div>
                 <div className="md:hidden h-px w-full bg-stone-200 my-2"></div>
                 
-                <div className="flex items-center gap-2">
-                    <input 
-                        type="file" 
-                        accept="video/*" 
-                        className="hidden" 
-                        ref={fileInputRef} 
-                        onChange={handleFileUpload} 
-                    />
-                    <button 
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
-                        className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed h-full"
-                    >
-                        <Upload className="w-5 h-5" />
-                        {isUploading ? 'Uploading...' : 'Upload Video'}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleClearVideo}
-                        title="Clear and Delete Video"
-                        className="flex items-center justify-center bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 p-3 rounded-xl transition-colors shadow-sm h-full"
-                    >
-                        <Trash2 className="w-5 h-5" />
-                    </button>
+                <div className="flex flex-col items-center gap-2">
+                    <div className="flex items-center gap-2 w-full">
+                        <input 
+                            type="file" 
+                            accept="video/*" 
+                            className="hidden" 
+                            ref={fileInputRef} 
+                            onChange={handleFileUpload} 
+                        />
+                        <button 
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={isUploading}
+                            className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed h-full"
+                        >
+                            <Upload className="w-5 h-5" />
+                            {isUploading ? `Uploading ${uploadProgress}%` : 'Upload Video'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleClearVideo}
+                            title="Clear and Delete Video"
+                            className="flex items-center justify-center bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 p-3 rounded-xl transition-colors shadow-sm h-full"
+                        >
+                            <Trash2 className="w-5 h-5" />
+                        </button>
+                    </div>
+                    {isUploading && (
+                        <div className="w-full bg-stone-200 rounded-full h-1.5 overflow-hidden">
+                            <div className="bg-indigo-600 h-1.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

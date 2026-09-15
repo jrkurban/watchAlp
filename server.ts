@@ -45,6 +45,11 @@ async function startServer() {
       socket.to(roomId).emit('seek', time);
     });
 
+    // Chat message
+    socket.on('chat-message', ({ roomId, message }) => {
+      socket.to(roomId).emit('chat-message', message);
+    });
+
     socket.on('disconnect', () => {
       console.log('User disconnected:', socket.id);
     });

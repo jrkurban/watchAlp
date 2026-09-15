@@ -1,0 +1,19 @@
+{
+  "project_id": "gen-lang-client-0462108388",
+  "firestore_schema": {
+    "collections": {
+      "rooms": {
+        "description": "Rooms for synchronized video watching",
+        "fields": {
+          "currentVideoUrl": "string | The URL of the video currently playing",
+          "storagePath": "string | (Optional) The path in Firebase Storage if the video was uploaded there",
+          "updatedAt": "timestamp"
+        },
+        "subcollections": {}
+      }
+    }
+  },
+  "auth": {
+    "providers": ["anonymous"]
+  }
+}

@@ -3,8 +3,6 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import multer from 'multer';
-import fs from 'fs';
 
 async function startServer() {
   const app = express();
@@ -15,35 +13,6 @@ async function startServer() {
     },
   });
   const PORT = 3000;
-
-  // Setup Multer for video uploads
-  const uploadsDir = path.join(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir);
-  }
-
-  const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-      cb(null, uploadsDir)
-    },
-    filename: function (req, file, cb) {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-      cb(null, uniqueSuffix + path.extname(file.originalname))
-    }
-  });
-  const upload = multer({ storage: storage });
-
-  // Serve uploads folder statically
-  app.use('/uploads', express.static(uploadsDir));
-
-  // Video Upload Endpoint
-  app.post('/api/upload', upload.single('video'), (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No video file uploaded' });
-    }
-    const videoUrl = `/uploads/${req.file.filename}`;
-    res.json({ url: videoUrl });
-  });
 
   // Socket.io logic
   io.on('connection', (socket) => {

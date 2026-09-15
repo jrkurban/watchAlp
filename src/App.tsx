@@ -3,12 +3,14 @@ import ReactPlayer from 'react-player';
 import { io, Socket } from 'socket.io-client';
 import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon } from 'lucide-react';
 import { initAuth, db, storage } from './lib/firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { Chat } from './components/Chat';
 
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 const SYNC_INTERVAL_MS = 3000;
+const PRESENCE_TTL_MS = 25000;
 
 interface VideoFile {
   name: string;
@@ -22,10 +24,25 @@ interface RoomState {
   playing: boolean;
 }
 
+interface MediaLike {
+  currentTime: number;
+  paused?: boolean;
+  play?: () => Promise<void> | void;
+}
+
 function readOrCreateRoomId(): string {
   const existing = new URLSearchParams(window.location.search).get('room')?.trim();
   if (existing) return existing;
   return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+}
+
+function getMedia(node: HTMLElement | null): MediaLike | null {
+  if (!node) return null;
+  const candidate = 'currentTime' in node
+    ? node
+    : node.querySelector('video, youtube-video, vimeo-video, wistia-video');
+  if (!candidate || typeof (candidate as unknown as MediaLike).currentTime !== 'number') return null;
+  return candidate as unknown as MediaLike;
 }
 
 export default function App() {
@@ -35,12 +52,14 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [uid, setUid] = useState('');
   const [userCount, setUserCount] = useState(1);
   const [copied, setCopied] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadedVideos, setUploadedVideos] = useState<VideoFile[]>([]);
   const [showVideoList, setShowVideoList] = useState(false);
+  const [needsUnlock, setNeedsUnlock] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return localStorage.getItem('theme') === 'dark';
   });
@@ -49,6 +68,8 @@ export default function App() {
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const playingRef = useRef(false);
+  const urlRef = useRef('');
+  const uidRef = useRef('');
   const ignoreNextPlayPause = useRef(false);
   const ignoreSeekUntil = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -58,22 +79,36 @@ export default function App() {
   const applyRemotePlaybackRef = useRef<(time: number, nextPlaying?: boolean) => void>(() => {});
 
   playingRef.current = playing;
+  urlRef.current = url;
+  uidRef.current = uid;
+
+  const seekMedia = (time: number) => {
+    const media = getMedia(playerRef.current);
+    if (!media) return false;
+    media.currentTime = time;
+    lastPlayedSeconds.current = time;
+    return true;
+  };
 
   const applyRemotePlayback = (time: number, nextPlaying?: boolean) => {
     ignoreNextPlayPause.current = true;
-    ignoreSeekUntil.current = Date.now() + 1000;
+    ignoreSeekUntil.current = Date.now() + 1200;
     window.setTimeout(() => {
       ignoreNextPlayPause.current = false;
-    }, 500);
+    }, 600);
 
     if (typeof nextPlaying === 'boolean') {
       setPlaying(nextPlaying);
     }
 
-    if (playerRef.current) {
-      playerRef.current.currentTime = time;
-      lastPlayedSeconds.current = time;
+    if (seekMedia(time)) {
       pendingSync.current = null;
+      if (nextPlaying) {
+        window.setTimeout(() => {
+          const media = getMedia(playerRef.current);
+          if (playingRef.current && media?.paused) setNeedsUnlock(true);
+        }, 700);
+      }
     } else {
       pendingSync.current = {
         time,
@@ -86,16 +121,32 @@ export default function App() {
 
   const applyPendingSync = () => {
     const pending = pendingSync.current;
-    if (!pending || !playerRef.current) return;
+    if (!pending) return;
     ignoreNextPlayPause.current = true;
-    ignoreSeekUntil.current = Date.now() + 1000;
-    playerRef.current.currentTime = pending.time;
-    lastPlayedSeconds.current = pending.time;
-    setPlaying(pending.playing);
-    pendingSync.current = null;
+    ignoreSeekUntil.current = Date.now() + 1200;
+    if (seekMedia(pending.time)) {
+      setPlaying(pending.playing);
+      pendingSync.current = null;
+    }
     window.setTimeout(() => {
       ignoreNextPlayPause.current = false;
-    }, 500);
+    }, 600);
+  };
+
+  const writePlayback = async (patch: { playing?: boolean; time?: number; currentVideoUrl?: string }) => {
+    if (!uidRef.current) return;
+    try {
+      await setDoc(doc(db, 'rooms', roomId), {
+        currentVideoUrl: patch.currentVideoUrl ?? urlRef.current,
+        playing: patch.playing ?? playingRef.current,
+        time: patch.time ?? lastPlayedSeconds.current,
+        playbackUpdatedAt: Date.now(),
+        playbackUpdatedBy: uidRef.current,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    } catch (err) {
+      console.error('Failed to write playback state', err);
+    }
   };
 
   useEffect(() => {
@@ -119,22 +170,44 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     let unsubRoom: (() => void) | undefined;
+    const unsubAuth = getAuth().onAuthStateChanged((user) => {
+      if (!cancelled) setUid(user?.uid ?? '');
+    });
 
     initAuth().then((ready) => {
       if (cancelled) return;
       setIsAuthReady(ready);
       if (!ready) return;
-      const roomRef = doc(db, 'rooms', roomId);
-      unsubRoom = onSnapshot(roomRef, (docSnap) => {
+      unsubRoom = onSnapshot(doc(db, 'rooms', roomId), (docSnap) => {
         if (!docSnap.exists()) return;
         const data = docSnap.data();
         if (typeof data.currentVideoUrl === 'string') {
           setUrl((prevUrl) => (prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl));
         }
+
+        const beats = data.viewerHeartbeats;
+        if (beats && typeof beats === 'object') {
+          const now = Date.now();
+          const online = Object.values(beats).filter((value) => (
+            typeof value === 'number' && now - value < PRESENCE_TTL_MS
+          )).length;
+          setUserCount(Math.max(1, online));
+        }
+
+        if (data.playbackUpdatedBy && data.playbackUpdatedBy === uidRef.current) return;
+        if (typeof data.time !== 'number') return;
+
+        const localTime = getMedia(playerRef.current)?.currentTime ?? lastPlayedSeconds.current;
+        const playingChanged = typeof data.playing === 'boolean' && data.playing !== playingRef.current;
+        if (playingChanged || Math.abs(data.time - localTime) > 1.5) {
+          applyRemotePlaybackRef.current(data.time, Boolean(data.playing));
+        }
       });
     });
 
-    const nextSocket = io();
+    const nextSocket = io({
+      reconnection: true,
+    });
     socketRef.current = nextSocket;
     setSocket(nextSocket);
 
@@ -148,13 +221,13 @@ export default function App() {
     });
 
     nextSocket.on('room-users', (count: number) => {
-      if (typeof count === 'number') setUserCount(count);
+      if (typeof count === 'number') {
+        setUserCount((prev) => Math.max(prev, count));
+      }
     });
 
     nextSocket.on('roomState', (state: RoomState) => {
-      if (typeof state.url === 'string') {
-        setUrl(state.url);
-      }
+      if (typeof state.url === 'string') setUrl(state.url);
       applyRemotePlaybackRef.current(state.time ?? 0, Boolean(state.playing));
     });
 
@@ -180,6 +253,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      unsubAuth();
       unsubRoom?.();
       nextSocket.removeAllListeners();
       nextSocket.disconnect();
@@ -188,14 +262,38 @@ export default function App() {
     };
   }, [roomId]);
 
+  useEffect(() => {
+    if (!uid || !isAuthReady) return;
+    const roomRef = doc(db, 'rooms', roomId);
+    const pulse = async () => {
+      try {
+        await updateDoc(roomRef, { [`viewerHeartbeats.${uid}`]: Date.now() });
+      } catch {
+        await setDoc(roomRef, {
+          currentVideoUrl: urlRef.current,
+          viewerHeartbeats: { [uid]: Date.now() },
+        }, { merge: true });
+      }
+    };
+    pulse();
+    const interval = window.setInterval(pulse, 8000);
+    return () => {
+      window.clearInterval(interval);
+      updateDoc(roomRef, { [`viewerHeartbeats.${uid}`]: deleteField() }).catch(() => {});
+    };
+  }, [uid, roomId, isAuthReady]);
+
   const handlePlay = () => {
+    setNeedsUnlock(false);
     if (ignoreNextPlayPause.current) {
       ignoreNextPlayPause.current = false;
       return;
     }
     setPlaying(true);
-    const time = playerRef.current?.currentTime ?? lastPlayedSeconds.current;
+    const time = getMedia(playerRef.current)?.currentTime ?? lastPlayedSeconds.current;
+    lastPlayedSeconds.current = time;
     socketRef.current?.emit('video-play', { roomId, time });
+    writePlayback({ playing: true, time });
   };
 
   const handlePause = () => {
@@ -204,8 +302,10 @@ export default function App() {
       return;
     }
     setPlaying(false);
-    const time = playerRef.current?.currentTime ?? lastPlayedSeconds.current;
+    const time = getMedia(playerRef.current)?.currentTime ?? lastPlayedSeconds.current;
+    lastPlayedSeconds.current = time;
     socketRef.current?.emit('video-pause', { roomId, time });
+    writePlayback({ playing: false, time });
   };
 
   const handleTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -217,6 +317,7 @@ export default function App() {
 
     if (Math.abs(playedSeconds - lastPlayedSeconds.current) > 1.5) {
       socketRef.current?.emit('seek', { roomId, time: playedSeconds });
+      writePlayback({ time: playedSeconds });
     }
 
     lastPlayedSeconds.current = playedSeconds;
@@ -229,6 +330,7 @@ export default function App() {
         time: playedSeconds,
         playing: playingRef.current,
       });
+      writePlayback({ time: playedSeconds, playing: playingRef.current });
     }
   };
 
@@ -237,6 +339,7 @@ export default function App() {
     const time = event.currentTarget.currentTime;
     lastPlayedSeconds.current = time;
     socketRef.current?.emit('seek', { roomId, time });
+    writePlayback({ time });
   };
 
   const updateRoomState = async (newUrl: string) => {
@@ -244,12 +347,7 @@ export default function App() {
     setPlaying(false);
     lastPlayedSeconds.current = 0;
     socketRef.current?.emit('videoStateUpdate', { roomId, state: { url: newUrl } });
-    try {
-      const roomRef = doc(db, 'rooms', roomId);
-      await setDoc(roomRef, { currentVideoUrl: newUrl, updatedAt: new Date().toISOString() }, { merge: true });
-    } catch (err) {
-      console.error('Failed to update room state in Firestore', err);
-    }
+    await writePlayback({ currentVideoUrl: newUrl, playing: false, time: 0 });
   };
 
   const handleUrlSubmit = (e: React.FormEvent) => {
@@ -361,7 +459,12 @@ export default function App() {
             <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">SyncWatch</h1>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg">
+                <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-sm font-semibold tabular-nums">{userCount}</span>
+                <span className="text-sm font-medium">online</span>
+            </div>
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
               className="p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-lg transition-colors"
@@ -380,7 +483,7 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-        <div className="lg:col-span-2 space-y-8">
+        <div className="lg:col-span-2 space-y-8 order-1">
             <div className="bg-white dark:bg-stone-950 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-800 p-6 transition-colors duration-200">
             <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4">
                 <form onSubmit={handleUrlSubmit} className="flex flex-1 items-center gap-3">
@@ -398,7 +501,8 @@ export default function App() {
                     </div>
                     <button
                         type="submit"
-                        className="bg-stone-900 hover:bg-stone-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap h-full"
+                        disabled={!isAuthReady}
+                        className="bg-stone-900 hover:bg-stone-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap h-full disabled:opacity-50"
                     >
                         Load Video
                     </button>
@@ -462,6 +566,7 @@ export default function App() {
               height="100%"
               playing={playing}
               controls={true}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
               onReady={applyPendingSync}
               onPlay={handlePlay}
               onPause={handlePause}
@@ -474,6 +579,20 @@ export default function App() {
               <p className="text-sm">Paste a URL or upload a video to start watching together.</p>
             </div>
           )}
+          {needsUnlock && url && (
+            <button
+              type="button"
+              onClick={() => {
+                setNeedsUnlock(false);
+                setPlaying(true);
+                void getMedia(playerRef.current)?.play?.();
+              }}
+              className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/70 text-white"
+            >
+              <Play className="w-12 h-12" />
+              <span className="text-sm font-medium">Click to sync playback</span>
+            </button>
+          )}
         </div>
 
         <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-xl p-5 flex items-start gap-4 justify-between transition-colors">
@@ -482,8 +601,8 @@ export default function App() {
                 <div>
                     <h3 className="font-semibold text-indigo-900 dark:text-indigo-300">Room: {roomId}</h3>
                     <p className="text-indigo-700 dark:text-indigo-400/80 text-sm mt-1 max-w-xl">
-                        Share this page with a friend. When you play, pause, or seek, their player will synchronize automatically.
-                        {isConnected ? ` ${userCount} watching.` : ''}
+                        Share this page with a friend. Play, pause, and seek stay in sync.
+                        {' '}{userCount} online.
                     </p>
                 </div>
             </div>
@@ -502,8 +621,8 @@ export default function App() {
         </div>
         </div>
 
-        <div className="lg:col-span-1">
-          {isConnected && socket && <Chat roomId={roomId} socket={socket} />}
+        <div className="lg:col-span-1 order-2 lg:sticky lg:top-24 self-start">
+          <Chat roomId={roomId} socket={socket} />
         </div>
 
       </main>

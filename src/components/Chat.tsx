@@ -9,7 +9,7 @@ const MAX_MESSAGE_LENGTH = 2000;
 
 interface ChatProps {
   roomId: string;
-  socket: Socket;
+  socket: Socket | null;
 }
 
 interface Message {
@@ -98,7 +98,7 @@ export function Chat({ roomId, socket }: ChatProps) {
 
     setMessages((prev) => mergeMessages(prev, [messageObj]));
     scrollToBottom();
-    socket.emit('chat-message', { roomId, message: messageObj });
+    socket?.emit('chat-message', { roomId, message: messageObj });
 
     try {
       const msgRef = doc(db, 'rooms', roomId, 'messages', messageId);
@@ -109,7 +109,7 @@ export function Chat({ roomId, socket }: ChatProps) {
   };
 
   return (
-    <div className="flex flex-col h-[500px] bg-white dark:bg-stone-950 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-sm transition-colors duration-200">
+    <div className="flex flex-col h-[500px] lg:h-[calc(100vh-8rem)] lg:min-h-[500px] bg-white dark:bg-stone-950 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-sm transition-colors duration-200">
       <div className="bg-stone-50 dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 p-4 transition-colors">
         <h3 className="font-semibold text-stone-800 dark:text-stone-100">Live Chat</h3>
       </div>

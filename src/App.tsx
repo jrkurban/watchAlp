@@ -302,6 +302,11 @@ export default function App() {
             onPlay={handlePlay}
             onPause={handlePause}
             onProgress={handleProgress}
+            config={{
+              file: {
+                forceVideo: url.includes('firebasestorage')
+              }
+            }}
           />
         </div>
         

@@ -46,8 +46,8 @@ export default function App() {
       const unsubscribe = onSnapshot(roomRef, (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
-          if (data.currentVideoUrl && data.currentVideoUrl !== url) {
-            setUrl(data.currentVideoUrl);
+          if (data.currentVideoUrl) {
+            setUrl(prevUrl => prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl);
           }
         }
       });
@@ -167,7 +167,8 @@ export default function App() {
     setUploadProgress(0);
 
     const storageRef = ref(storage, `rooms/${ROOM_ID}/${Date.now()}_${file.name}`);
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    const metadata = { contentType: file.type || 'video/mp4' };
+    const uploadTask = uploadBytesResumable(storageRef, file, metadata);
 
     uploadTask.on('state_changed', 
       (snapshot) => {

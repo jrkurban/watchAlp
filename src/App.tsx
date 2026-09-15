@@ -457,12 +457,12 @@ export default function App() {
   return (
     <div className="min-h-screen bg-stone-50 dark:bg-stone-900 text-stone-900 dark:text-stone-100 font-sans selection:bg-stone-200 dark:selection:bg-stone-700 transition-colors duration-200">
       <header className="bg-white dark:bg-stone-950 border-b border-stone-200 dark:border-stone-800 px-6 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm transition-colors duration-200">
-        <div className="flex items-center gap-3">
+        <a href="/" className="flex items-center gap-3">
             <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-sm">
                 <Video className="w-5 h-5" />
             </div>
             <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">SyncWatch</h1>
-        </div>
+        </a>
 
         <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg">

@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { createVisitorStore, getClientIp } from './visitor-log';
 
 type RoomPlayback = {
   url?: string;
@@ -20,6 +21,9 @@ function isFiniteNumber(value: unknown): value is number {
 
 async function startServer() {
   const app = express();
+  app.set('trust proxy', true);
+  app.use(express.json());
+
   const server = createServer(app);
   const io = new Server(server, {
     cors: {
@@ -27,6 +31,8 @@ async function startServer() {
     },
   });
   const PORT = 3000;
+  const LOGS_KEY = process.env.LOGS_KEY || 'syncwatch-logs';
+  const visitors = createVisitorStore();
   const roomPlayback = new Map<string, RoomPlayback>();
 
   const patchRoom = (roomId: string, patch: Partial<RoomPlayback>) => {
@@ -43,6 +49,8 @@ async function startServer() {
 
   io.on('connection', (socket) => {
     let currentRoom: string | null = null;
+    const ip = getClientIp(socket.handshake.headers as Record<string, unknown>, socket.handshake.address);
+    const userAgent = String(socket.handshake.headers['user-agent'] ?? '');
 
     socket.on('joinRoom', (roomId) => {
       if (!isRoomId(roomId)) return;
@@ -54,6 +62,7 @@ async function startServer() {
 
       currentRoom = roomId;
       socket.join(roomId);
+      void visitors.touch({ ip, userAgent, roomId });
 
       const state = roomPlayback.get(roomId);
       if (state) {
@@ -109,6 +118,44 @@ async function startServer() {
     res.json({ status: 'ok' });
   });
 
+  app.post('/api/session', async (req, res) => {
+    const roomId = typeof req.body?.roomId === 'string' ? req.body.roomId : null;
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
+    const record = await visitors.touch({
+      sessionId,
+      ip: getClientIp(req.headers as Record<string, unknown>, req.socket.remoteAddress ?? ''),
+      userAgent: String(req.headers['user-agent'] ?? ''),
+      roomId,
+    });
+    res.json({ id: record.id });
+  });
+
+  app.post('/api/session/heartbeat', async (req, res) => {
+    const id = typeof req.body?.id === 'string' ? req.body.id : '';
+    const roomId = typeof req.body?.roomId === 'string' ? req.body.roomId : undefined;
+    const record = await visitors.heartbeat(id, roomId);
+    if (!record) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.json({ id: record.id });
+  });
+
+  app.post('/api/session/leave', async (req, res) => {
+    const id = typeof req.body?.id === 'string' ? req.body.id : '';
+    await visitors.leave(id);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/logs', async (req, res) => {
+    const key = typeof req.query.key === 'string' ? req.query.key : '';
+    if (key !== LOGS_KEY) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    res.json({ visitors: await visitors.list() });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -125,6 +172,7 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Visitor logs: http://localhost:${PORT}/logs?key=${LOGS_KEY}`);
   });
 }
 

@@ -19,5 +19,13 @@ service cloud.firestore {
         allow update, delete: if false;
       }
     }
+
+    match /visitorLogs/{logId} {
+      allow create, update: if request.auth != null
+        && request.resource.data.ip is string
+        && request.resource.data.enteredAt is number
+        && request.resource.data.lastSeen is number;
+      allow read: if request.auth != null;
+    }
   }
 }

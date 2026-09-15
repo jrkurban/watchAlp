@@ -7,6 +7,7 @@ import { deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firest
 import { getAuth } from 'firebase/auth';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { Chat } from './components/Chat';
+import { startVisitorSession } from './lib/visitorSession';
 
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 const SYNC_INTERVAL_MS = 3000;
@@ -165,6 +166,10 @@ export default function App() {
     const nextUrl = new URL(window.location.href);
     nextUrl.searchParams.set('room', roomId);
     window.history.replaceState({}, '', nextUrl);
+  }, [roomId]);
+
+  useEffect(() => {
+    return startVisitorSession(roomId);
   }, [roomId]);
 
   useEffect(() => {

@@ -14,8 +14,12 @@ export const storage = getStorage(app);
 // Authenticate anonymously
 export const initAuth = async () => {
   try {
-    await signInAnonymously(auth);
+    if (!auth.currentUser) {
+      await signInAnonymously(auth);
+    }
+    return Boolean(auth.currentUser);
   } catch (error) {
     console.error("Firebase auth error:", error);
+    return false;
   }
 };

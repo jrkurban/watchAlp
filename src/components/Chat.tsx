@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, doc, setDoc, getDocs, query, orderBy, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { Socket } from 'socket.io-client';
 import { getAuth } from 'firebase/auth';
+
+const MAX_MESSAGE_LENGTH = 2000;
 
 interface ChatProps {
   roomId: string;
@@ -17,6 +19,13 @@ interface Message {
   createdAt: number;
 }
 
+function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
+  const byId = new Map<string, Message>();
+  for (const message of prev) byId.set(message.id, message);
+  for (const message of incoming) byId.set(message.id, message);
+  return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
+}
+
 export function Chat({ roomId, socket }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -26,45 +35,34 @@ export function Chat({ roomId, socket }: ChatProps) {
   useEffect(() => {
     const auth = getAuth();
     const unsubscribe = auth.onAuthStateChanged((user) => {
-      if (user) {
-        setCurrentUid(user.uid);
-      } else {
-        setCurrentUid('');
-      }
+      setCurrentUid(user?.uid ?? '');
     });
     return () => unsubscribe();
   }, []);
 
-  // Fetch initial messages history from Firestore
   useEffect(() => {
-    const fetchHistory = async () => {
-      try {
-        const q = query(collection(db, 'rooms', roomId, 'messages'), orderBy('createdAt', 'asc'));
-        const snapshot = await getDocs(q);
-        const history: Message[] = [];
-        snapshot.forEach(doc => {
-          history.push({ id: doc.id, ...doc.data() } as Message);
-        });
-        setMessages(history);
-        scrollToBottom();
-      } catch (err) {
-        console.error('Failed to fetch chat history:', err);
-      }
-    };
-    
-    fetchHistory();
+    setMessages([]);
+    const q = query(collection(db, 'rooms', roomId, 'messages'), orderBy('createdAt', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const history = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      })) as Message[];
+      setMessages((prev) => mergeMessages(prev, history));
+      scrollToBottom();
+    }, (err) => {
+      console.error('Failed to listen for chat history:', err);
+    });
+
+    return () => unsubscribe();
   }, [roomId]);
 
-  // Listen for incoming messages via Socket
   useEffect(() => {
     if (!socket) return;
 
     const handleNewMessage = (message: Message) => {
-      setMessages(prev => {
-        // Prevent duplicates if socket delivers multiple times
-        if (prev.some(m => m.id === message.id)) return prev;
-        return [...prev, message];
-      });
+      if (!message?.id || typeof message.text !== 'string') return;
+      setMessages((prev) => mergeMessages(prev, [message]));
       scrollToBottom();
     };
 
@@ -83,29 +81,25 @@ export function Chat({ roomId, socket }: ChatProps) {
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !currentUid) return;
+    if (!currentUid) return;
 
-    const msgText = newMessage.trim();
+    const msgText = newMessage.trim().slice(0, MAX_MESSAGE_LENGTH);
+    if (!msgText) return;
+
     setNewMessage('');
 
-    const messageId = Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    const timestamp = Date.now();
-    
+    const messageId = crypto.randomUUID();
     const messageObj: Message = {
       id: messageId,
       text: msgText,
       uid: currentUid,
-      createdAt: timestamp
+      createdAt: Date.now()
     };
 
-    // 1. Instantly update local state
-    setMessages(prev => [...prev, messageObj]);
+    setMessages((prev) => mergeMessages(prev, [messageObj]));
     scrollToBottom();
-
-    // 2. Broadcast via Socket for instant update for others
     socket.emit('chat-message', { roomId, message: messageObj });
 
-    // 3. Store in Firestore
     try {
       const msgRef = doc(db, 'rooms', roomId, 'messages', messageId);
       await setDoc(msgRef, messageObj);
@@ -119,7 +113,7 @@ export function Chat({ roomId, socket }: ChatProps) {
       <div className="bg-stone-50 dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 p-4 transition-colors">
         <h3 className="font-semibold text-stone-800 dark:text-stone-100">Live Chat</h3>
       </div>
-      
+
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50/50 dark:bg-stone-950/50">
         {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center text-stone-400 dark:text-stone-600 text-sm">
@@ -130,10 +124,10 @@ export function Chat({ roomId, socket }: ChatProps) {
             const isMe = msg.uid === currentUid;
             return (
               <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                <div 
+                <div
                   className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm ${
-                    isMe 
-                      ? 'bg-indigo-600 text-white rounded-br-sm' 
+                    isMe
+                      ? 'bg-indigo-600 text-white rounded-br-sm'
                       : 'bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 border border-stone-200 dark:border-stone-700 rounded-bl-sm shadow-sm'
                   }`}
                 >
@@ -151,13 +145,15 @@ export function Chat({ roomId, socket }: ChatProps) {
           <input
             type="text"
             value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder="Type a message..."
-            className="flex-1 bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:text-stone-100 dark:placeholder-stone-500 transition-colors"
+            onChange={(e) => setNewMessage(e.target.value.slice(0, MAX_MESSAGE_LENGTH))}
+            placeholder={currentUid ? 'Type a message...' : 'Connecting…'}
+            disabled={!currentUid}
+            maxLength={MAX_MESSAGE_LENGTH}
+            className="flex-1 bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:text-stone-100 dark:placeholder-stone-500 transition-colors disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={!newMessage.trim()}
+            disabled={!newMessage.trim() || !currentUid}
             className="p-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-400 text-white rounded-xl transition-colors shrink-0"
           >
             <Send className="w-5 h-5" />

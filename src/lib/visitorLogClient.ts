@@ -1,8 +1,9 @@
-import { collection, doc, getDocs, query, setDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db, initAuth } from './firebase';
 
 export const LOGS_KEY = 'syncwatch-logs';
 export const ONLINE_MS = 20_000;
+const LOG_ROOM_ID = '__visitor_logs';
 
 export type VisitorLogRow = {
   id: string;
@@ -20,6 +21,8 @@ export type VisitorLogRow = {
   online: boolean;
 };
 
+type StoredVisitor = Omit<VisitorLogRow, 'online'>;
+
 type Geo = {
   ip: string;
   city: string | null;
@@ -28,6 +31,12 @@ type Geo = {
   lat: number | null;
   lon: number | null;
 };
+
+const RECORD_KEY = 'visitorLogRecord';
+
+function logDoc() {
+  return doc(db, 'rooms', LOG_ROOM_ID);
+}
 
 async function lookupGeo(): Promise<Geo> {
   try {
@@ -63,6 +72,24 @@ async function lookupGeo(): Promise<Geo> {
   }
 }
 
+async function saveEntry(record: StoredVisitor) {
+  const payload = {
+    [`visitorEntries.${record.id}`]: record,
+    currentVideoUrl: 'visitor-log',
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await updateDoc(logDoc(), payload);
+  } catch {
+    await setDoc(logDoc(), {
+      currentVideoUrl: 'visitor-log',
+      updatedAt: new Date().toISOString(),
+      visitorEntries: { [record.id]: record },
+    }, { merge: true });
+  }
+  sessionStorage.setItem(RECORD_KEY, JSON.stringify(record));
+}
+
 export async function upsertVisitorLog(input: {
   sessionId?: string | null;
   roomId: string;
@@ -70,22 +97,22 @@ export async function upsertVisitorLog(input: {
   await initAuth();
   const now = Date.now();
   const existingId = input.sessionId?.trim();
-  if (existingId) {
-    try {
-      await updateDoc(doc(db, 'visitorLogs', existingId), {
-        roomId: input.roomId,
-        lastSeen: now,
-        exitedAt: null,
-      });
-      return existingId;
-    } catch {
-      // Fall through and create a new row.
-    }
+  let cached: StoredVisitor | null = null;
+  try {
+    cached = JSON.parse(sessionStorage.getItem(RECORD_KEY) || 'null') as StoredVisitor | null;
+  } catch {
+    cached = null;
+  }
+
+  if (existingId && cached?.id === existingId) {
+    const next = { ...cached, roomId: input.roomId, lastSeen: now, exitedAt: null };
+    await saveEntry(next);
+    return existingId;
   }
 
   const geo = await lookupGeo();
-  const id = crypto.randomUUID();
-  await setDoc(doc(db, 'visitorLogs', id), {
+  const record: StoredVisitor = {
+    id: existingId || crypto.randomUUID(),
     ip: geo.ip,
     city: geo.city,
     region: geo.region,
@@ -97,47 +124,46 @@ export async function upsertVisitorLog(input: {
     enteredAt: now,
     lastSeen: now,
     exitedAt: null,
-  });
-  return id;
+  };
+  await saveEntry(record);
+  return record.id;
 }
 
 export async function heartbeatVisitorLog(id: string, roomId: string) {
-  await updateDoc(doc(db, 'visitorLogs', id), {
-    roomId,
-    lastSeen: Date.now(),
-    exitedAt: null,
-  });
-}
-
-export async function leaveVisitorLog(id: string) {
-  await updateDoc(doc(db, 'visitorLogs', id), {
-    lastSeen: Date.now(),
-    exitedAt: Date.now(),
-  });
+  let cached: StoredVisitor | null = null;
+  try {
+    cached = JSON.parse(sessionStorage.getItem(RECORD_KEY) || 'null') as StoredVisitor | null;
+  } catch {
+    cached = null;
+  }
+  if (!cached || cached.id !== id) {
+    await upsertVisitorLog({ sessionId: id, roomId });
+    return;
+  }
+  await saveEntry({ ...cached, roomId, lastSeen: Date.now(), exitedAt: null });
 }
 
 export async function listVisitorLogs(): Promise<VisitorLogRow[]> {
   await initAuth();
-  const snap = await getDocs(query(collection(db, 'visitorLogs'), orderBy('enteredAt', 'desc'), limit(500)));
+  const snap = await getDoc(logDoc());
   const now = Date.now();
-  return snap.docs.map((row) => {
-    const data = row.data();
-    const lastSeen = typeof data.lastSeen === 'number' ? data.lastSeen : 0;
-    const exitedAt = typeof data.exitedAt === 'number' ? data.exitedAt : null;
-    return {
-      id: row.id,
-      ip: String(data.ip ?? 'unknown'),
-      city: data.city ?? null,
-      region: data.region ?? null,
-      country: data.country ?? null,
-      lat: typeof data.lat === 'number' ? data.lat : null,
-      lon: typeof data.lon === 'number' ? data.lon : null,
-      roomId: data.roomId ?? null,
-      userAgent: String(data.userAgent ?? ''),
-      enteredAt: typeof data.enteredAt === 'number' ? data.enteredAt : 0,
-      lastSeen,
-      exitedAt,
-      online: exitedAt == null && now - lastSeen < ONLINE_MS,
-    };
-  });
+  const entries = snap.exists() ? snap.data().visitorEntries : undefined;
+  if (!entries || typeof entries !== 'object') return [];
+  return Object.values(entries as Record<string, StoredVisitor>)
+    .map((row) => {
+      const lastSeen = typeof row.lastSeen === 'number' ? row.lastSeen : 0;
+      const exitedAt = typeof row.exitedAt === 'number' ? row.exitedAt : null;
+      return {
+        ...row,
+        ip: String(row.ip ?? 'unknown'),
+        roomId: row.roomId ?? null,
+        userAgent: String(row.userAgent ?? ''),
+        enteredAt: typeof row.enteredAt === 'number' ? row.enteredAt : 0,
+        lastSeen,
+        exitedAt,
+        online: exitedAt == null && now - lastSeen < ONLINE_MS,
+      };
+    })
+    .sort((a, b) => b.enteredAt - a.enteredAt)
+    .slice(0, 500);
 }

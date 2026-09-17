@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { MapPin, RefreshCw, Users } from 'lucide-react';
 import { LOGS_KEY, listVisitorLogs, type VisitorLogRow } from './lib/visitorLogClient';
+import { startVisitorSession } from './lib/visitorSession';
 
 type LogRow = VisitorLogRow;
 
@@ -25,6 +26,10 @@ export default function Logs() {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<'all' | 'online'>('all');
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    return startVisitorSession('logs');
+  }, []);
 
   useEffect(() => {
     if (!key) return;

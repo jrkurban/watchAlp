@@ -1,4 +1,4 @@
-import { heartbeatVisitorLog, leaveVisitorLog, upsertVisitorLog } from './visitorLogClient';
+import { heartbeatVisitorLog, upsertVisitorLog } from './visitorLogClient';
 
 const SESSION_KEY = 'visitorSessionId';
 
@@ -37,18 +37,8 @@ export function startVisitorSession(roomId: string) {
     heartbeatVisitorLog(sessionId, roomId).catch(() => {});
   }, 8000);
 
-  const leave = () => {
-    if (!sessionId) return;
-    const payload = JSON.stringify({ id: sessionId });
-    navigator.sendBeacon?.('/api/session/leave', new Blob([payload], { type: 'application/json' }));
-    void leaveVisitorLog(sessionId);
-  };
-
-  window.addEventListener('pagehide', leave);
-
   return () => {
     stopped = true;
     window.clearInterval(interval);
-    window.removeEventListener('pagehide', leave);
   };
 }

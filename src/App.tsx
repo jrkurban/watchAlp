@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, SyntheticEvent } from 'react';
-import ReactPlayer from 'react-player';
+import ReactPlayer from './lib/watchPlayer';
 import { io, Socket } from 'socket.io-client';
 import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon, Pencil, Shield } from 'lucide-react';
 import { initAuth, db, storage } from './lib/firebase';

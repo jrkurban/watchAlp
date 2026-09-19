@@ -11,6 +11,29 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/hls.js') || id.includes('hls-video-element')) {
+              return 'hls';
+            }
+            if (id.includes('@firebase/firestore') || id.includes('/firebase/firestore')) {
+              return 'firebase-firestore';
+            }
+            if (id.includes('@firebase/auth') || id.includes('/firebase/auth')) {
+              return 'firebase-auth';
+            }
+            if (id.includes('@firebase/storage') || id.includes('/firebase/storage')) {
+              return 'firebase-storage';
+            }
+            if (id.includes('node_modules/@firebase') || id.includes('node_modules/firebase/')) {
+              return 'firebase';
+            }
+          },
+        },
+      },
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify - file watching is disabled to prevent flickering during agent edits.

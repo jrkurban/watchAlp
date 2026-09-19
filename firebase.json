@@ -1,5 +1,6 @@
 {
   "firestore": {
+    "database": "ai-studio-syncwatch-c1ee8822-e239-4268-bb1e-a164a45889d8",
     "rules": "firestore.rules"
   },
   "storage": {

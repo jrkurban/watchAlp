@@ -50,7 +50,7 @@ export function toWebVtt(text: string): string {
   return `WEBVTT\n\n${converted}\n`;
 }
 
-const MEDIA_SELECTOR = 'hls-video, dash-video, youtube-video, vimeo-video, wistia-video, video';
+const MEDIA_SELECTOR = 'hls-video, youtube-video, vimeo-video, wistia-video, video';
 
 export function getHtmlVideo(node: HTMLElement | null): HTMLVideoElement | null {
   const seen = new Set<Element>();

@@ -1,5 +1,5 @@
 {
-  "name": "SyncWatch",
+  "name": "Apeiron",
   "description": "Synchronized video watching application using WebSockets.",
   "requestFramePermissions": [],
   "majorCapabilities": []

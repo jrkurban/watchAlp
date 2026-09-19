@@ -3,9 +3,16 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /rooms/{roomId} {
       allow read: if request.auth != null;
-      allow create, update: if request.auth != null
+      allow create: if request.auth != null
         && request.resource.data.currentVideoUrl is string
         && request.resource.data.currentVideoUrl.size() <= 4096;
+      allow update: if request.auth != null
+        && request.resource.data.currentVideoUrl is string
+        && request.resource.data.currentVideoUrl.size() <= 4096
+        && (
+          !('bannedUsers' in resource.data)
+          || !(request.auth.uid in resource.data.bannedUsers)
+        );
 
       match /messages/{messageId} {
         allow read: if request.auth != null;
@@ -23,6 +30,10 @@ service cloud.firestore {
               && request.resource.data.name.size() >= 2
               && request.resource.data.name.size() <= 24
             )
+          )
+          && (
+            !('bannedUsers' in get(/databases/$(database)/documents/rooms/$(roomId)).data)
+            || !(request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.bannedUsers)
           );
         allow update, delete: if false;
       }

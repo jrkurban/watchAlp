@@ -11,6 +11,7 @@ interface ChatProps {
   roomId: string;
   socket: Socket | null;
   displayName: string;
+  disabled?: boolean;
 }
 
 interface Message {
@@ -28,7 +29,7 @@ function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
   return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export function Chat({ roomId, socket, displayName }: ChatProps) {
+export function Chat({ roomId, socket, displayName, disabled }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [currentUid, setCurrentUid] = useState<string>('');
@@ -83,7 +84,7 @@ export function Chat({ roomId, socket, displayName }: ChatProps) {
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUid) return;
+    if (!currentUid || disabled) return;
 
     const msgText = newMessage.trim().slice(0, MAX_MESSAGE_LENGTH);
     if (!msgText) return;
@@ -159,14 +160,14 @@ export function Chat({ roomId, socket, displayName }: ChatProps) {
             type="text"
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value.slice(0, MAX_MESSAGE_LENGTH))}
-            placeholder={currentUid ? 'Type a message...' : 'Connecting…'}
-            disabled={!currentUid}
+            placeholder={disabled ? 'You cannot chat' : currentUid ? 'Type a message...' : 'Connecting…'}
+            disabled={!currentUid || disabled}
             maxLength={MAX_MESSAGE_LENGTH}
             className="flex-1 bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:text-stone-100 dark:placeholder-stone-500 transition-colors disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={!newMessage.trim() || !currentUid}
+            disabled={!newMessage.trim() || !currentUid || disabled}
             className="p-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-stone-200 dark:disabled:bg-stone-800 disabled:text-stone-400 text-white rounded-xl transition-colors shrink-0"
           >
             <Send className="w-5 h-5" />

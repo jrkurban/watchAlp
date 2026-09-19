@@ -8,9 +8,19 @@ import { getAuth } from 'firebase/auth';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll, uploadBytes } from 'firebase/storage';
 import { Chat } from './components/Chat';
 import { MediaTrackBar } from './components/MediaTrackBar';
+import { RoomMembers } from './components/RoomMembers';
 import { startVisitorSession } from './lib/visitorSession';
 import { getStoredUsername, saveUsername, USERNAME_MAX } from './lib/identity';
-import { hasAnyAdmin, isUidAdmin, shouldClaimRoomAdmin } from './lib/roomRoles';
+import {
+  hasAnyAdmin,
+  isUidAdmin,
+  isUidBanned,
+  parseBannedUsers,
+  parseRoomMembers,
+  shouldClaimRoomAdmin,
+  type BannedUser,
+  type RoomMember,
+} from './lib/roomRoles';
 import {
   type CaptionTrack,
   type ExtraAudioTrack,
@@ -82,6 +92,11 @@ export default function App() {
   const [nameDraft, setNameDraft] = useState('');
   const [isEditingName, setIsEditingName] = useState(false);
   const [isAdmin, setIsAdmin] = useState(shouldClaimRoomAdmin(roomId));
+  const [isBanned, setIsBanned] = useState(false);
+  const [ownerUid, setOwnerUid] = useState('');
+  const [members, setMembers] = useState<RoomMember[]>([]);
+  const [bannedUsers, setBannedUsers] = useState<BannedUser[]>([]);
+  const [showPeople, setShowPeople] = useState(false);
   const [viewerNames, setViewerNames] = useState<string[]>([]);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [detectedCaptions, setDetectedCaptions] = useState<CaptionTrack[]>([]);
@@ -105,11 +120,13 @@ export default function App() {
   const pendingSync = useRef<{ time: number; playing: boolean } | null>(null);
   const applyRemotePlaybackRef = useRef<(time: number, nextPlaying?: boolean) => void>(() => {});
   const adminClaimedRef = useRef(false);
+  const isBannedRef = useRef(false);
 
   playingRef.current = playing;
   urlRef.current = url;
   uidRef.current = uid;
   displayNameRef.current = displayName;
+  isBannedRef.current = isBanned;
 
   const seekMedia = (time: number) => {
     const media = getMedia(playerRef.current);
@@ -163,7 +180,7 @@ export default function App() {
   };
 
   const writePlayback = async (patch: { playing?: boolean; time?: number; currentVideoUrl?: string }) => {
-    if (!uidRef.current) return;
+    if (!uidRef.current || isBannedRef.current) return;
     try {
       await setDoc(doc(db, 'rooms', roomId), {
         currentVideoUrl: patch.currentVideoUrl ?? urlRef.current,
@@ -229,41 +246,54 @@ export default function App() {
 
         const beats = data.viewerHeartbeats;
         const names = data.viewerNames;
-        if (beats && typeof beats === 'object') {
-          const now = Date.now();
-          const onlineIds = Object.entries(beats)
-            .filter(([, value]) => typeof value === 'number' && now - value < PRESENCE_TTL_MS)
-            .map(([id]) => id);
-          setUserCount(Math.max(1, onlineIds.length));
-          const labelByUid = names && typeof names === 'object'
-            ? names as Record<string, unknown>
-            : {};
-          setViewerNames(onlineIds.map((id) => {
-            const label = labelByUid[id];
-            if (typeof label === 'string' && label.trim()) return label.trim();
-            return id === uidRef.current ? displayNameRef.current : 'Guest';
-          }));
-        }
+        const liveOwner = typeof data.ownerUid === 'string' ? data.ownerUid : '';
+        setOwnerUid(liveOwner);
+        const banned = isUidBanned(data.bannedUsers, liveUid);
+        setIsBanned(banned);
+        setBannedUsers(parseBannedUsers(data.bannedUsers));
+        const nextMembers = parseRoomMembers({
+          heartbeats: beats,
+          names,
+          adminUids: data.adminUids,
+          bannedUsers: data.bannedUsers,
+          ownerUid: liveOwner,
+          selfUid: liveUid,
+          selfName: displayNameRef.current,
+          now: Date.now(),
+          onlineMs: PRESENCE_TTL_MS,
+        });
+        setMembers(nextMembers);
+        setUserCount(Math.max(1, nextMembers.filter((member) => member.online).length || 1));
+        setViewerNames(nextMembers.filter((member) => member.online).map((member) => member.name));
 
-        if (isUidAdmin(data.adminUids, uidRef.current) || shouldClaimRoomAdmin(roomId)) {
+        if (banned) {
+          setIsAdmin(false);
+        } else if (isUidAdmin(data.adminUids, liveUid) || liveOwner === liveUid || shouldClaimRoomAdmin(roomId)) {
           setIsAdmin(true);
         } else {
           setIsAdmin(false);
         }
 
-        if (uidRef.current && !adminClaimedRef.current && (!hasAnyAdmin(data.adminUids) || shouldClaimRoomAdmin(roomId))) {
+        if (!banned && liveUid && !adminClaimedRef.current && (!hasAnyAdmin(data.adminUids) || shouldClaimRoomAdmin(roomId))) {
           adminClaimedRef.current = true;
           setIsAdmin(true);
-          updateDoc(doc(db, 'rooms', roomId), { [`adminUids.${uidRef.current}`]: true }).catch(() => {
+          const claim: Record<string, unknown> = {
+            [`adminUids.${liveUid}`]: true,
+            currentVideoUrl: urlRef.current || '',
+          };
+          if (!liveOwner) claim.ownerUid = liveUid;
+          updateDoc(doc(db, 'rooms', roomId), claim).catch(() => {
             setDoc(doc(db, 'rooms', roomId), {
               currentVideoUrl: urlRef.current || '',
-              adminUids: { [uidRef.current]: true },
+              adminUids: { [liveUid]: true },
+              ...(liveOwner ? {} : { ownerUid: liveUid }),
             }, { merge: true }).catch(() => {
               adminClaimedRef.current = false;
             });
           });
         }
 
+        if (banned) return;
         if (data.playbackUpdatedBy && data.playbackUpdatedBy === uidRef.current) return;
         if (typeof data.time !== 'number') return;
 
@@ -328,7 +358,7 @@ export default function App() {
   }, [roomId]);
 
   useEffect(() => {
-    if (!uid || !isAuthReady) return;
+    if (!uid || !isAuthReady || isBanned) return;
     const roomRef = doc(db, 'rooms', roomId);
     const pulse = async () => {
       const claimAdmin = shouldClaimRoomAdmin(roomId);
@@ -336,7 +366,10 @@ export default function App() {
         [`viewerHeartbeats.${uid}`]: Date.now(),
         [`viewerNames.${uid}`]: displayNameRef.current,
       };
-      if (claimAdmin) patch[`adminUids.${uid}`] = true;
+      if (claimAdmin) {
+        patch[`adminUids.${uid}`] = true;
+        if (!ownerUid) patch.ownerUid = uid;
+      }
       try {
         await updateDoc(roomRef, patch);
       } catch {
@@ -344,7 +377,7 @@ export default function App() {
           currentVideoUrl: urlRef.current || '',
           viewerHeartbeats: { [uid]: Date.now() },
           viewerNames: { [uid]: displayNameRef.current },
-          ...(claimAdmin ? { adminUids: { [uid]: true } } : {}),
+          ...(claimAdmin ? { adminUids: { [uid]: true }, ownerUid: ownerUid || uid } : {}),
         }, { merge: true });
       }
     };
@@ -357,7 +390,7 @@ export default function App() {
         [`viewerNames.${uid}`]: deleteField(),
       }).catch(() => {});
     };
-  }, [uid, roomId, isAuthReady]);
+  }, [uid, roomId, isAuthReady, isBanned, ownerUid]);
 
   const handlePlay = () => {
     setNeedsUnlock(false);
@@ -537,6 +570,39 @@ export default function App() {
     updateDoc(doc(db, 'rooms', roomId), { [`viewerNames.${uid}`]: next }).catch(() => {});
   };
 
+  const patchRoom = (fields: Record<string, unknown>) =>
+    updateDoc(doc(db, 'rooms', roomId), {
+      ...fields,
+      currentVideoUrl: urlRef.current || url || '',
+      updatedAt: new Date().toISOString(),
+    });
+
+  const grantAdmin = (targetUid: string) => {
+    if (!isAdmin) return;
+    void patchRoom({ [`adminUids.${targetUid}`]: true });
+  };
+
+  const revokeAdmin = (targetUid: string) => {
+    if (!isAdmin || targetUid === ownerUid || targetUid === uid) return;
+    void patchRoom({ [`adminUids.${targetUid}`]: deleteField() });
+  };
+
+  const banMember = (member: RoomMember) => {
+    if (!isAdmin || member.uid === uid || member.isOwner) return;
+    if (!window.confirm(`Ban ${member.name} from this room?`)) return;
+    void patchRoom({
+      [`bannedUsers.${member.uid}`]: { name: member.name, at: Date.now() },
+      [`adminUids.${member.uid}`]: deleteField(),
+      [`viewerHeartbeats.${member.uid}`]: deleteField(),
+      [`viewerNames.${member.uid}`]: deleteField(),
+    });
+  };
+
+  const unbanUser = (targetUid: string) => {
+    if (!isAdmin) return;
+    void patchRoom({ [`bannedUsers.${targetUid}`]: deleteField() });
+  };
+
   const handleUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
@@ -648,7 +714,7 @@ export default function App() {
             <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-sm">
                 <Video className="w-5 h-5" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">SyncWatch</h1>
+            <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">Apeiron</h1>
         </a>
 
         <div className="flex items-center gap-3">
@@ -690,11 +756,16 @@ export default function App() {
                 <Pencil className="w-3.5 h-3.5 text-stone-400" />
               </button>
             )}
-            <div className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setShowPeople(true)}
+              className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+              title="People in this room"
+            >
                 <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 <span className="text-sm font-semibold tabular-nums">{userCount}</span>
                 <span className="text-sm font-medium">online</span>
-            </div>
+            </button>
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
               className="p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-lg transition-colors"
@@ -711,6 +782,17 @@ export default function App() {
         </div>
       </header>
 
+      {isBanned ? (
+        <main className="max-w-lg mx-auto p-8">
+          <div className="bg-white dark:bg-stone-950 border border-rose-200 dark:border-rose-900 rounded-2xl p-8 text-center">
+            <h2 className="text-xl font-semibold text-stone-900 dark:text-stone-100">You've been banned</h2>
+            <p className="text-sm text-stone-500 dark:text-stone-400 mt-2">An admin removed you from this room.</p>
+            <a href="/" className="inline-block mt-6 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-2.5 rounded-xl">
+              Back home
+            </a>
+          </div>
+        </main>
+      ) : (
       <main className="max-w-7xl mx-auto p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
 
         <div className="lg:col-span-2 space-y-8 order-1">
@@ -873,7 +955,7 @@ export default function App() {
                 <div>
                     <h3 className="font-semibold text-indigo-900 dark:text-indigo-300">Room: {roomId}</h3>
                     <p className="text-indigo-700 dark:text-indigo-400/80 text-sm mt-1 max-w-xl">
-                        {isAdmin ? 'You are the admin. Share this page so friends can watch.' : 'Share this page with a friend. Play, pause, and seek stay in sync.'}
+                        {isAdmin ? 'You are the admin. Open People to grant admin or ban someone.' : 'Share this page with a friend. Play, pause, and seek stay in sync.'}
                         {' '}{userCount} online
                         {viewerNames.length > 0 ? `: ${viewerNames.join(', ')}` : '.'}
                     </p>
@@ -895,10 +977,25 @@ export default function App() {
         </div>
 
         <div className="lg:col-span-1 order-2 lg:sticky lg:top-24 self-start">
-          <Chat roomId={roomId} socket={socket} displayName={displayName} />
+          <Chat roomId={roomId} socket={socket} displayName={displayName} disabled={isBanned} />
         </div>
 
       </main>
+      )}
+
+      {showPeople && !isBanned ? (
+        <RoomMembers
+          members={members}
+          banned={bannedUsers}
+          isAdmin={isAdmin}
+          currentUid={uid}
+          onClose={() => setShowPeople(false)}
+          onGrantAdmin={grantAdmin}
+          onRevokeAdmin={revokeAdmin}
+          onBan={banMember}
+          onUnban={unbanUser}
+        />
+      ) : null}
 
       {showVideoList && (
         <div className="fixed inset-0 bg-stone-900/50 dark:bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">

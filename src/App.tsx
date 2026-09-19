@@ -5,11 +5,22 @@ import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Mo
 import { initAuth, db, storage } from './lib/firebase';
 import { deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
-import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll, uploadBytes } from 'firebase/storage';
 import { Chat } from './components/Chat';
+import { MediaTrackBar } from './components/MediaTrackBar';
 import { startVisitorSession } from './lib/visitorSession';
 import { getStoredUsername, saveUsername, USERNAME_MAX } from './lib/identity';
 import { hasAnyAdmin, isUidAdmin, shouldClaimRoomAdmin } from './lib/roomRoles';
+import {
+  type CaptionTrack,
+  type ExtraAudioTrack,
+  isUploadedVideo,
+  labelFromFilename,
+  langFromFilename,
+  mediaKeyFromUrl,
+  parseTrackMap,
+  toWebVtt,
+} from './lib/mediaTracks';
 
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 const SYNC_INTERVAL_MS = 3000;
@@ -53,7 +64,6 @@ export default function App() {
   const [url, setUrl] = useState('');
   const [inputUrl, setInputUrl] = useState('');
   const [playing, setPlaying] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [uid, setUid] = useState('');
   const [userCount, setUserCount] = useState(1);
@@ -72,6 +82,12 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [isAdmin, setIsAdmin] = useState(shouldClaimRoomAdmin(roomId));
   const [viewerNames, setViewerNames] = useState<string[]>([]);
+  const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
+  const [extraAudioTracks, setExtraAudioTracks] = useState<ExtraAudioTrack[]>([]);
+  const [selectedCaptionId, setSelectedCaptionId] = useState('');
+  const [selectedAudioId, setSelectedAudioId] = useState('default');
+  const [playerReadyTick, setPlayerReadyTick] = useState(0);
+  const [captionSrcById, setCaptionSrcById] = useState<Record<string, string>>({});
 
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -202,6 +218,13 @@ export default function App() {
           setUrl((prevUrl) => (prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl));
         }
 
+        const mediaKey = mediaKeyFromUrl(typeof data.currentVideoUrl === 'string' ? data.currentVideoUrl : urlRef.current);
+        const bucket = data.videoTracks && typeof data.videoTracks === 'object'
+          ? (data.videoTracks as Record<string, { captions?: unknown; audio?: unknown }>)[mediaKey]
+          : undefined;
+        setCaptionTracks(parseTrackMap<CaptionTrack>(bucket?.captions));
+        setExtraAudioTracks(parseTrackMap<ExtraAudioTrack>(bucket?.audio));
+
         const beats = data.viewerHeartbeats;
         const names = data.viewerNames;
         if (beats && typeof beats === 'object') {
@@ -257,12 +280,7 @@ export default function App() {
     setSocket(nextSocket);
 
     nextSocket.on('connect', () => {
-      setIsConnected(true);
       nextSocket.emit('joinRoom', roomId);
-    });
-
-    nextSocket.on('disconnect', () => {
-      setIsConnected(false);
     });
 
     nextSocket.on('room-users', (count: number) => {
@@ -405,6 +423,93 @@ export default function App() {
     lastPlayedSeconds.current = 0;
     socketRef.current?.emit('videoStateUpdate', { roomId, state: { url: newUrl } });
     await writePlayback({ currentVideoUrl: newUrl, playing: false, time: 0 });
+  };
+
+  useEffect(() => {
+    setSelectedCaptionId('');
+    setSelectedAudioId('default');
+  }, [url]);
+
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    for (const track of captionTracks) {
+      if (track.vtt) next[track.id] = URL.createObjectURL(new Blob([track.vtt], { type: 'text/vtt' }));
+      else if (track.url) next[track.id] = track.url;
+    }
+    setCaptionSrcById(next);
+    return () => {
+      for (const src of Object.values(next)) {
+        if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+      }
+    };
+  }, [captionTracks]);
+
+  const handleCaptionUpload = async (file: File) => {
+    if (!isAdmin || !isUploadedVideo(url)) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Subtitle file is too large (max 5 MB).');
+      return;
+    }
+    try {
+      const vtt = toWebVtt(await file.text());
+      if (vtt.length > 350_000) {
+        alert('Subtitle file is too large to store.');
+        return;
+      }
+      const id = crypto.randomUUID().slice(0, 8);
+      const mediaKey = mediaKeyFromUrl(url);
+      const record: CaptionTrack = {
+        id,
+        label: labelFromFilename(file.name),
+        lang: langFromFilename(file.name),
+        vtt,
+      };
+      await updateDoc(doc(db, 'rooms', roomId), {
+        [`videoTracks.${mediaKey}.captions.${id}`]: record,
+        currentVideoUrl: url,
+        updatedAt: new Date().toISOString(),
+      });
+      setSelectedCaptionId(id);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to upload subtitles.');
+    }
+  };
+
+  const handleAudioTrackUpload = async (file: File) => {
+    if (!isAdmin || !isUploadedVideo(url)) return;
+    if (!file.type.startsWith('audio/')) {
+      alert('Please choose an audio file.');
+      return;
+    }
+    if (file.size > 200 * 1024 * 1024) {
+      alert('Audio file is too large (max 200 MB).');
+      return;
+    }
+    try {
+      const id = crypto.randomUUID().slice(0, 8);
+      const mediaKey = mediaKeyFromUrl(url);
+      const safeName = file.name.replace(/[^\w.\-]+/g, '_');
+      const path = `rooms/${roomId}/audio/${mediaKey}/${id}_${safeName}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, file, { contentType: file.type || 'audio/mpeg' });
+      const downloadUrl = await getDownloadURL(storageRef);
+      const record: ExtraAudioTrack = {
+        id,
+        label: labelFromFilename(file.name),
+        url: downloadUrl,
+        path,
+      };
+      await updateDoc(doc(db, 'rooms', roomId), {
+        [`videoTracks.${mediaKey}.audio.${id}`]: record,
+        currentVideoUrl: url,
+        updatedAt: new Date().toISOString(),
+      });
+      setSelectedAudioId(`file:${id}`);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to upload audio.');
+    }
   };
 
   const commitDisplayName = (value: string) => {
@@ -582,9 +687,9 @@ export default function App() {
               {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
             <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                <div className={`w-2 h-2 rounded-full ${isAuthReady ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
                 <span className="text-sm font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider">
-                    {isConnected ? 'Connected' : 'Disconnected'}
+                    {isAuthReady ? 'Connected' : 'Connecting'}
                 </span>
             </div>
         </div>
@@ -683,12 +788,27 @@ export default function App() {
               playing={playing}
               controls={true}
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
-              onReady={applyPendingSync}
+              onReady={() => {
+                applyPendingSync();
+                setPlayerReadyTick((tick) => tick + 1);
+              }}
               onPlay={handlePlay}
               onPause={handlePause}
               onTimeUpdate={handleTimeUpdate}
               onSeeked={handleSeeked}
-            />
+            >
+              {captionTracks.map((track) => (
+                captionSrcById[track.id] ? (
+                <track
+                  key={track.id}
+                  kind="subtitles"
+                  src={captionSrcById[track.id]}
+                  srcLang={track.lang}
+                  label={track.label}
+                />
+                ) : null
+              ))}
+            </ReactPlayer>
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-400">
               <Video className="w-12 h-12 text-stone-600" />
@@ -712,6 +832,23 @@ export default function App() {
             </button>
           )}
         </div>
+        {url && isUploadedVideo(url) ? (
+          <MediaTrackBar
+            url={url}
+            isAdmin={isAdmin}
+            captions={captionTracks}
+            extraAudio={extraAudioTracks}
+            selectedCaptionId={selectedCaptionId}
+            selectedAudioId={selectedAudioId}
+            onCaptionChange={setSelectedCaptionId}
+            onAudioChange={setSelectedAudioId}
+            onUploadCaption={(file) => { void handleCaptionUpload(file); }}
+            onUploadAudio={(file) => { void handleAudioTrackUpload(file); }}
+            playerRef={playerRef}
+            playing={playing}
+            readyTick={playerReadyTick}
+          />
+        ) : null}
 
         <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-xl p-5 flex items-start gap-4 justify-between transition-colors">
             <div className="flex items-start gap-4">

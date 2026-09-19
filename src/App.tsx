@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, SyntheticEvent } from 'react';
 import ReactPlayer from 'react-player';
 import { io, Socket } from 'socket.io-client';
-import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon } from 'lucide-react';
+import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon, Pencil, Shield } from 'lucide-react';
 import { initAuth, db, storage } from './lib/firebase';
 import { deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { Chat } from './components/Chat';
 import { startVisitorSession } from './lib/visitorSession';
+import { getStoredUsername, saveUsername, USERNAME_MAX } from './lib/identity';
+import { hasAnyAdmin, isUidAdmin, shouldClaimRoomAdmin } from './lib/roomRoles';
 
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 const SYNC_INTERVAL_MS = 3000;
@@ -65,12 +67,18 @@ export default function App() {
     return localStorage.getItem('theme') === 'dark';
   });
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [displayName, setDisplayName] = useState(getStoredUsername);
+  const [nameDraft, setNameDraft] = useState('');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(shouldClaimRoomAdmin(roomId));
+  const [viewerNames, setViewerNames] = useState<string[]>([]);
 
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const playingRef = useRef(false);
   const urlRef = useRef('');
   const uidRef = useRef('');
+  const displayNameRef = useRef(displayName);
   const ignoreNextPlayPause = useRef(false);
   const ignoreSeekUntil = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -78,10 +86,12 @@ export default function App() {
   const lastSyncSentAt = useRef(0);
   const pendingSync = useRef<{ time: number; playing: boolean } | null>(null);
   const applyRemotePlaybackRef = useRef<(time: number, nextPlaying?: boolean) => void>(() => {});
+  const adminClaimedRef = useRef(false);
 
   playingRef.current = playing;
   urlRef.current = url;
   uidRef.current = uid;
+  displayNameRef.current = displayName;
 
   const seekMedia = (time: number) => {
     const media = getMedia(playerRef.current);
@@ -186,17 +196,47 @@ export default function App() {
       unsubRoom = onSnapshot(doc(db, 'rooms', roomId), (docSnap) => {
         if (!docSnap.exists()) return;
         const data = docSnap.data();
+        const liveUid = getAuth().currentUser?.uid || uidRef.current;
+        if (liveUid) uidRef.current = liveUid;
         if (typeof data.currentVideoUrl === 'string') {
           setUrl((prevUrl) => (prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl));
         }
 
         const beats = data.viewerHeartbeats;
+        const names = data.viewerNames;
         if (beats && typeof beats === 'object') {
           const now = Date.now();
-          const online = Object.values(beats).filter((value) => (
-            typeof value === 'number' && now - value < PRESENCE_TTL_MS
-          )).length;
-          setUserCount(Math.max(1, online));
+          const onlineIds = Object.entries(beats)
+            .filter(([, value]) => typeof value === 'number' && now - value < PRESENCE_TTL_MS)
+            .map(([id]) => id);
+          setUserCount(Math.max(1, onlineIds.length));
+          const labelByUid = names && typeof names === 'object'
+            ? names as Record<string, unknown>
+            : {};
+          setViewerNames(onlineIds.map((id) => {
+            const label = labelByUid[id];
+            if (typeof label === 'string' && label.trim()) return label.trim();
+            return id === uidRef.current ? displayNameRef.current : 'Guest';
+          }));
+        }
+
+        if (isUidAdmin(data.adminUids, uidRef.current) || shouldClaimRoomAdmin(roomId)) {
+          setIsAdmin(true);
+        } else {
+          setIsAdmin(false);
+        }
+
+        if (uidRef.current && !adminClaimedRef.current && (!hasAnyAdmin(data.adminUids) || shouldClaimRoomAdmin(roomId))) {
+          adminClaimedRef.current = true;
+          setIsAdmin(true);
+          updateDoc(doc(db, 'rooms', roomId), { [`adminUids.${uidRef.current}`]: true }).catch(() => {
+            setDoc(doc(db, 'rooms', roomId), {
+              currentVideoUrl: urlRef.current || '',
+              adminUids: { [uidRef.current]: true },
+            }, { merge: true }).catch(() => {
+              adminClaimedRef.current = false;
+            });
+          });
         }
 
         if (data.playbackUpdatedBy && data.playbackUpdatedBy === uidRef.current) return;
@@ -271,12 +311,20 @@ export default function App() {
     if (!uid || !isAuthReady) return;
     const roomRef = doc(db, 'rooms', roomId);
     const pulse = async () => {
+      const claimAdmin = shouldClaimRoomAdmin(roomId);
+      const patch: Record<string, unknown> = {
+        [`viewerHeartbeats.${uid}`]: Date.now(),
+        [`viewerNames.${uid}`]: displayNameRef.current,
+      };
+      if (claimAdmin) patch[`adminUids.${uid}`] = true;
       try {
-        await updateDoc(roomRef, { [`viewerHeartbeats.${uid}`]: Date.now() });
+        await updateDoc(roomRef, patch);
       } catch {
         await setDoc(roomRef, {
-          currentVideoUrl: urlRef.current,
+          currentVideoUrl: urlRef.current || '',
           viewerHeartbeats: { [uid]: Date.now() },
+          viewerNames: { [uid]: displayNameRef.current },
+          ...(claimAdmin ? { adminUids: { [uid]: true } } : {}),
         }, { merge: true });
       }
     };
@@ -284,7 +332,10 @@ export default function App() {
     const interval = window.setInterval(pulse, 8000);
     return () => {
       window.clearInterval(interval);
-      updateDoc(roomRef, { [`viewerHeartbeats.${uid}`]: deleteField() }).catch(() => {});
+      updateDoc(roomRef, {
+        [`viewerHeartbeats.${uid}`]: deleteField(),
+        [`viewerNames.${uid}`]: deleteField(),
+      }).catch(() => {});
     };
   }, [uid, roomId, isAuthReady]);
 
@@ -348,6 +399,7 @@ export default function App() {
   };
 
   const updateRoomState = async (newUrl: string) => {
+    if (!isAdmin) return;
     setUrl(newUrl);
     setPlaying(false);
     lastPlayedSeconds.current = 0;
@@ -355,8 +407,18 @@ export default function App() {
     await writePlayback({ currentVideoUrl: newUrl, playing: false, time: 0 });
   };
 
+  const commitDisplayName = (value: string) => {
+    const next = saveUsername(value);
+    setDisplayName(next);
+    setNameDraft(next);
+    setIsEditingName(false);
+    if (!uid) return;
+    updateDoc(doc(db, 'rooms', roomId), { [`viewerNames.${uid}`]: next }).catch(() => {});
+  };
+
   const handleUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdmin) return;
     if (inputUrl.trim()) {
       updateRoomState(inputUrl.trim());
       setInputUrl('');
@@ -364,6 +426,10 @@ export default function App() {
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isAdmin) {
+      e.target.value = '';
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -414,7 +480,7 @@ export default function App() {
   };
 
   const handleClearVideo = async () => {
-    if (!url) return;
+    if (!isAdmin || !url) return;
     if (!window.confirm('Remove the current video from this room?')) return;
 
     if (url.includes('firebasestorage')) {
@@ -465,6 +531,44 @@ export default function App() {
         </a>
 
         <div className="flex items-center gap-3">
+            {isEditingName ? (
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  commitDisplayName(nameDraft);
+                }}
+              >
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  maxLength={USERNAME_MAX}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  className="w-36 md:w-44 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-1.5 text-sm"
+                />
+                <button
+                  type="submit"
+                  className="p-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500"
+                  title="Save username"
+                >
+                  <Check className="w-4 h-4" />
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setNameDraft(displayName);
+                  setIsEditingName(true);
+                }}
+                className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+                title="Change username"
+              >
+                <span className="text-sm font-semibold truncate max-w-[9rem] md:max-w-[12rem]">{displayName}</span>
+                {isAdmin ? <Shield className="w-3.5 h-3.5 text-indigo-500" /> : null}
+                <Pencil className="w-3.5 h-3.5 text-stone-400" />
+              </button>
+            )}
             <div className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg">
                 <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 <span className="text-sm font-semibold tabular-nums">{userCount}</span>
@@ -490,6 +594,7 @@ export default function App() {
 
         <div className="lg:col-span-2 space-y-8 order-1">
             <div className="bg-white dark:bg-stone-950 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-800 p-6 transition-colors duration-200">
+            {isAdmin ? (
             <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4">
                 <form onSubmit={handleUrlSubmit} className="flex flex-1 items-center gap-3">
                     <div className="relative flex-1">
@@ -560,6 +665,12 @@ export default function App() {
                     )}
                 </div>
             </div>
+            ) : (
+              <div className="flex items-center gap-3 text-stone-600 dark:text-stone-400">
+                <Shield className="w-5 h-5 text-indigo-500 shrink-0" />
+                <p className="text-sm">Only the room admin can paste a link or upload a video. You can watch and chat.</p>
+              </div>
+            )}
         </div>
 
         <div className="bg-black rounded-2xl overflow-hidden shadow-xl aspect-video relative group">
@@ -581,7 +692,9 @@ export default function App() {
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-400">
               <Video className="w-12 h-12 text-stone-600" />
-              <p className="text-sm">Paste a URL or upload a video to start watching together.</p>
+              <p className="text-sm">
+                {isAdmin ? 'Paste a URL or upload a video to start watching together.' : 'Waiting for the admin to add a video.'}
+              </p>
             </div>
           )}
           {needsUnlock && url && (
@@ -606,8 +719,9 @@ export default function App() {
                 <div>
                     <h3 className="font-semibold text-indigo-900 dark:text-indigo-300">Room: {roomId}</h3>
                     <p className="text-indigo-700 dark:text-indigo-400/80 text-sm mt-1 max-w-xl">
-                        Share this page with a friend. Play, pause, and seek stay in sync.
-                        {' '}{userCount} online.
+                        {isAdmin ? 'You are the admin. Share this page so friends can watch.' : 'Share this page with a friend. Play, pause, and seek stay in sync.'}
+                        {' '}{userCount} online
+                        {viewerNames.length > 0 ? `: ${viewerNames.join(', ')}` : '.'}
                     </p>
                 </div>
             </div>
@@ -627,7 +741,7 @@ export default function App() {
         </div>
 
         <div className="lg:col-span-1 order-2 lg:sticky lg:top-24 self-start">
-          <Chat roomId={roomId} socket={socket} />
+          <Chat roomId={roomId} socket={socket} displayName={displayName} />
         </div>
 
       </main>
@@ -669,6 +783,7 @@ export default function App() {
                       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => {
+                            if (!isAdmin) return;
                             updateRoomState(video.url);
                             setShowVideoList(false);
                           }}

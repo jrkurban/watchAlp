@@ -15,7 +15,15 @@ service cloud.firestore {
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 2000
-          && request.resource.data.createdAt is number;
+          && request.resource.data.createdAt is number
+          && (
+            !('name' in request.resource.data)
+            || (
+              request.resource.data.name is string
+              && request.resource.data.name.size() >= 2
+              && request.resource.data.name.size() <= 24
+            )
+          );
         allow update, delete: if false;
       }
     }

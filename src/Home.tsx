@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, Moon, Play, Sun, Users, Video } from 'lucide-react';
 import { startVisitorSession } from './lib/visitorSession';
+import { markAsRoomHost } from './lib/roomRoles';
 
 function createRoomId() {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
@@ -63,11 +64,15 @@ export default function Home() {
           <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6">
             <h2 className="font-semibold text-lg">Yeni oda</h2>
             <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">
-              Boş bir oda oluştur ve davet linkini kopyala.
+              Boş bir oda oluştur. Sen admin olursun; link ve video yükleyebilirsin.
             </p>
             <button
               type="button"
-              onClick={() => goToRoom(createRoomId())}
+              onClick={() => {
+                const id = createRoomId();
+                markAsRoomHost(id);
+                goToRoom(id);
+              }}
               className="mt-5 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-3 rounded-xl"
             >
               Oda oluştur
@@ -114,7 +119,7 @@ export default function Home() {
           </li>
           <li className="flex gap-3">
             <Video className="w-5 h-5 text-indigo-600 shrink-0" />
-            <span>YouTube linki veya video yükle</span>
+            <span>Sadece oda admini link ve video yükler</span>
           </li>
         </ul>
       </main>

@@ -10,12 +10,14 @@ const MAX_MESSAGE_LENGTH = 2000;
 interface ChatProps {
   roomId: string;
   socket: Socket | null;
+  displayName: string;
 }
 
 interface Message {
   id: string;
   text: string;
   uid: string;
+  name?: string;
   createdAt: number;
 }
 
@@ -26,7 +28,7 @@ function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
   return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export function Chat({ roomId, socket }: ChatProps) {
+export function Chat({ roomId, socket, displayName }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [currentUid, setCurrentUid] = useState<string>('');
@@ -93,6 +95,7 @@ export function Chat({ roomId, socket }: ChatProps) {
       id: messageId,
       text: msgText,
       uid: currentUid,
+      name: displayName,
       createdAt: Date.now()
     };
 
@@ -111,7 +114,12 @@ export function Chat({ roomId, socket }: ChatProps) {
   return (
     <div className="flex flex-col h-[500px] lg:h-[calc(100vh-8rem)] lg:min-h-[500px] bg-white dark:bg-stone-950 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-sm transition-colors duration-200">
       <div className="bg-stone-50 dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 p-4 transition-colors">
-        <h3 className="font-semibold text-stone-800 dark:text-stone-100">Live Chat</h3>
+        <div>
+          <h3 className="font-semibold text-stone-800 dark:text-stone-100">Live Chat</h3>
+          {displayName ? (
+            <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5 truncate">as {displayName}</p>
+          ) : null}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50/50 dark:bg-stone-950/50">
@@ -124,14 +132,19 @@ export function Chat({ roomId, socket }: ChatProps) {
             const isMe = msg.uid === currentUid;
             return (
               <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm ${
-                    isMe
-                      ? 'bg-indigo-600 text-white rounded-br-sm'
-                      : 'bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 border border-stone-200 dark:border-stone-700 rounded-bl-sm shadow-sm'
-                  }`}
-                >
-                  {msg.text}
+                <div className={`max-w-[80%] ${isMe ? 'text-right' : 'text-left'}`}>
+                  <p className={`text-[11px] mb-1 px-1 ${isMe ? 'text-indigo-500' : 'text-stone-400 dark:text-stone-500'}`}>
+                    {isMe ? 'You' : (msg.name || 'Guest')}
+                  </p>
+                  <div
+                    className={`px-4 py-2 rounded-2xl text-sm ${
+                      isMe
+                        ? 'bg-indigo-600 text-white rounded-br-sm'
+                        : 'bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 border border-stone-200 dark:border-stone-700 rounded-bl-sm shadow-sm'
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
                 </div>
               </div>
             );

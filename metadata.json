@@ -1,5 +1,5 @@
 {
-  "name": "Apeiron",
+  "name": "Apeiron Watch",
   "description": "Synchronized video watching application using WebSockets.",
   "requestFramePermissions": [],
   "majorCapabilities": []

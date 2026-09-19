@@ -10,8 +10,16 @@ service cloud.firestore {
         && request.resource.data.currentVideoUrl is string
         && request.resource.data.currentVideoUrl.size() <= 4096
         && (
-          !('bannedUsers' in resource.data)
-          || !(request.auth.uid in resource.data.bannedUsers)
+          roomId.matches('.*__voice$')
+            ? (
+              !exists(/databases/$(database)/documents/rooms/$(roomId.split('__')[0]))
+              || !('bannedUsers' in get(/databases/$(database)/documents/rooms/$(roomId.split('__')[0])).data)
+              || !(request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId.split('__')[0])).data.bannedUsers)
+            )
+            : (
+              !('bannedUsers' in resource.data)
+              || !(request.auth.uid in resource.data.bannedUsers)
+            )
         );
 
       match /messages/{messageId} {

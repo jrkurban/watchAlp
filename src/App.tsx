@@ -9,6 +9,7 @@ import { ref, uploadBytesResumable, getDownloadURL, deleteObject, listAll, uploa
 import { Chat } from './components/Chat';
 import { MediaTrackBar } from './components/MediaTrackBar';
 import { RoomMembers } from './components/RoomMembers';
+import { VoiceBar } from './components/VoiceBar';
 import { startVisitorSession } from './lib/visitorSession';
 import { getStoredUsername, saveUsername, USERNAME_MAX } from './lib/identity';
 import {
@@ -21,6 +22,12 @@ import {
   type BannedUser,
   type RoomMember,
 } from './lib/roomRoles';
+import {
+  listenVoiceMembers,
+  startVoiceSession,
+  type VoiceMember,
+  type VoiceSession,
+} from './lib/voiceChat';
 import {
   type CaptionTrack,
   type ExtraAudioTrack,
@@ -98,6 +105,11 @@ export default function App() {
   const [bannedUsers, setBannedUsers] = useState<BannedUser[]>([]);
   const [showPeople, setShowPeople] = useState(false);
   const [viewerNames, setViewerNames] = useState<string[]>([]);
+  const [voiceMembers, setVoiceMembers] = useState<VoiceMember[]>([]);
+  const [inVoice, setInVoice] = useState(false);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [voiceJoining, setVoiceJoining] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [detectedCaptions, setDetectedCaptions] = useState<CaptionTrack[]>([]);
   const [extraAudioTracks, setExtraAudioTracks] = useState<ExtraAudioTrack[]>([]);
@@ -121,6 +133,7 @@ export default function App() {
   const applyRemotePlaybackRef = useRef<(time: number, nextPlaying?: boolean) => void>(() => {});
   const adminClaimedRef = useRef(false);
   const isBannedRef = useRef(false);
+  const voiceSessionRef = useRef<VoiceSession | null>(null);
 
   playingRef.current = playing;
   urlRef.current = url;
@@ -391,6 +404,72 @@ export default function App() {
       }).catch(() => {});
     };
   }, [uid, roomId, isAuthReady, isBanned, ownerUid]);
+
+  useEffect(() => {
+    if (!isAuthReady) return;
+    return listenVoiceMembers(roomId, setVoiceMembers);
+  }, [roomId, isAuthReady]);
+
+  useEffect(() => {
+    voiceSessionRef.current?.setName(displayName);
+  }, [displayName]);
+
+  useEffect(() => {
+    if (!isBanned && uid) return;
+    voiceSessionRef.current?.destroy();
+    voiceSessionRef.current = null;
+    setInVoice(false);
+    setVoiceJoining(false);
+    setVoiceMuted(false);
+  }, [isBanned, uid]);
+
+  useEffect(() => () => {
+    voiceSessionRef.current?.destroy();
+    voiceSessionRef.current = null;
+  }, [roomId]);
+
+  const joinVoice = async () => {
+    if (!uid || isBanned || inVoice || voiceJoining) return;
+    setVoiceError(null);
+    setVoiceJoining(true);
+    voiceSessionRef.current?.destroy();
+    const session = startVoiceSession({
+      roomId,
+      uid,
+      name: displayNameRef.current,
+      onMembers: setVoiceMembers,
+      onError: (message) => {
+        setVoiceError(message);
+        setInVoice(false);
+        setVoiceJoining(false);
+      },
+    });
+    voiceSessionRef.current = session;
+    const ok = await session.join();
+    setVoiceJoining(false);
+    if (ok && voiceSessionRef.current === session) {
+      setInVoice(true);
+    } else if (voiceSessionRef.current === session) {
+      session.destroy();
+      voiceSessionRef.current = null;
+      setInVoice(false);
+    }
+  };
+
+  const leaveVoice = () => {
+    voiceSessionRef.current?.destroy();
+    voiceSessionRef.current = null;
+    setInVoice(false);
+    setVoiceJoining(false);
+    setVoiceMuted(false);
+    setVoiceError(null);
+  };
+
+  const toggleVoiceMute = () => {
+    const next = !voiceMuted;
+    setVoiceMuted(next);
+    voiceSessionRef.current?.setMuted(next);
+  };
 
   const handlePlay = () => {
     setNeedsUnlock(false);
@@ -714,7 +793,7 @@ export default function App() {
             <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-sm">
                 <Video className="w-5 h-5" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">Apeiron</h1>
+            <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">Apeiron Watch</h1>
         </a>
 
         <div className="flex items-center gap-3">
@@ -766,6 +845,18 @@ export default function App() {
                 <span className="text-sm font-semibold tabular-nums">{userCount}</span>
                 <span className="text-sm font-medium">online</span>
             </button>
+            <VoiceBar
+              inVoice={inVoice}
+              muted={voiceMuted}
+              joining={voiceJoining}
+              members={voiceMembers}
+              selfUid={uid}
+              error={voiceError}
+              disabled={isBanned || !isAuthReady || !uid}
+              onJoin={() => { void joinVoice(); }}
+              onLeave={leaveVoice}
+              onToggleMute={toggleVoiceMute}
+            />
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
               className="p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-lg transition-colors"

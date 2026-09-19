@@ -39,7 +39,7 @@ export default function Home() {
           <div className="bg-indigo-600 p-2 rounded-lg text-white">
             <Video className="w-5 h-5" />
           </div>
-          <span className="text-xl font-bold tracking-tight">Apeiron</span>
+          <span className="text-xl font-bold tracking-tight">Apeiron Watch</span>
         </div>
         <button
           type="button"

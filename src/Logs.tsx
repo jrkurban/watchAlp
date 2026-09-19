@@ -99,7 +99,7 @@ export default function Logs() {
       <div className="max-w-6xl mx-auto space-y-6">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Apeiron</p>
+            <p className="text-sm font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Apeiron Watch</p>
             <h1 className="text-2xl font-bold mt-1">Ziyaretçi logları</h1>
             <p className="text-stone-500 dark:text-stone-400 text-sm mt-1">
               IP, konum, oda, giriş-çıkış ve anlık online durumu.

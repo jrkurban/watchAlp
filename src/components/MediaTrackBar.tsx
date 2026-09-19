@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Captions, Languages, Upload } from 'lucide-react';
-import { getHtmlVideo, type CaptionTrack, type ExtraAudioTrack } from '../lib/mediaTracks';
+import { getHtmlVideo, collectEmbeddedCaptions, type CaptionTrack, type ExtraAudioTrack, type EmbeddedCaption } from '../lib/mediaTracks';
 
 type EmbeddedAudio = { id: string; label: string };
 
@@ -47,6 +47,7 @@ export function MediaTrackBar({
   const captionInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
   const [embeddedAudio, setEmbeddedAudio] = useState<EmbeddedAudio[]>([]);
+  const [embeddedCaptions, setEmbeddedCaptions] = useState<EmbeddedCaption[]>([]);
 
   const selectedFileAudio = extraAudio.find((track) => `file:${track.id}` === selectedAudioId);
 
@@ -69,13 +70,75 @@ export function MediaTrackBar({
   }, [url, playerRef, extraAudio.length, readyTick]);
 
   useEffect(() => {
+    let cancelled = false;
+    let cleanup = () => {};
+    const attach = () => {
+      if (cancelled) return;
+      const video = getHtmlVideo(playerRef.current);
+      if (!video?.textTracks) return false;
+      const refresh = () => {
+        if (!cancelled) setEmbeddedCaptions(collectEmbeddedCaptions(video));
+      };
+      refresh();
+      video.textTracks.addEventListener('addtrack', refresh);
+      video.textTracks.addEventListener('removetrack', refresh);
+      video.addEventListener('loadedmetadata', refresh);
+      video.addEventListener('loadeddata', refresh);
+      cleanup = () => {
+        video.textTracks.removeEventListener('addtrack', refresh);
+        video.textTracks.removeEventListener('removetrack', refresh);
+        video.removeEventListener('loadedmetadata', refresh);
+        video.removeEventListener('loadeddata', refresh);
+      };
+      return true;
+    };
+    attach();
+    const timers = [250, 800, 2000, 4000].map((ms) => window.setTimeout(() => {
+      cleanup();
+      attach();
+    }, ms));
+    return () => {
+      cancelled = true;
+      cleanup();
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [url, playerRef, captions.length, readyTick]);
+
+  useEffect(() => {
     const apply = () => {
       const video = getHtmlVideo(playerRef.current);
       if (!video?.textTracks) return;
-      const selectedLabel = captions.find((item) => item.id === selectedCaptionId)?.label;
+      const selectedUpload = captions.find((item) => item.id === selectedCaptionId);
+      const selectedInband = selectedCaptionId.startsWith('inband:')
+        ? collectEmbeddedCaptions(video).find((item) => item.id === selectedCaptionId)
+        : undefined;
+
+      const htmlTrackByText = new Map<TextTrack, HTMLTrackElement>();
+      video.querySelectorAll?.('track').forEach((el) => {
+        if (el.track) htmlTrackByText.set(el.track, el);
+      });
+
       for (let i = 0; i < video.textTracks.length; i += 1) {
         const track = video.textTracks[i];
-        track.mode = selectedCaptionId && track.label === selectedLabel ? 'showing' : 'disabled';
+        if (track.kind !== 'subtitles' && track.kind !== 'captions') continue;
+        const htmlTrack = htmlTrackByText.get(track);
+        if (!selectedCaptionId) {
+          track.mode = 'disabled';
+        } else if (selectedInband) {
+          const matches = !htmlTrack
+            && (track.label || track.language || 'Subtitles') === selectedInband.label
+            && (track.language || '') === selectedInband.language;
+          track.mode = matches ? 'showing' : 'disabled';
+        } else if (selectedUpload) {
+          const matches = Boolean(htmlTrack)
+            && (
+              htmlTrack?.dataset.trackId === selectedCaptionId
+              || (!htmlTrack?.dataset.trackId && track.label === selectedUpload.label)
+            );
+          track.mode = matches ? 'showing' : 'disabled';
+        } else {
+          track.mode = 'disabled';
+        }
       }
     };
     apply();
@@ -174,9 +237,20 @@ export function MediaTrackBar({
           className="flex-1 min-w-0 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2 text-sm"
         >
           <option value="">Off</option>
-          {captions.map((track) => (
-            <option key={track.id} value={track.id}>{track.label}</option>
-          ))}
+          {embeddedCaptions.length > 0 ? (
+            <optgroup label="In video">
+              {embeddedCaptions.map((track) => (
+                <option key={track.id} value={track.id}>{track.label}</option>
+              ))}
+            </optgroup>
+          ) : null}
+          {captions.length > 0 ? (
+            <optgroup label="Uploaded">
+              {captions.map((track) => (
+                <option key={track.id} value={track.id}>{track.label}</option>
+              ))}
+            </optgroup>
+          ) : null}
         </select>
         {isAdmin ? (
           <>

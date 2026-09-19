@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, SyntheticEvent } from 'react';
+import React, { useState, useEffect, useRef, useMemo, SyntheticEvent } from 'react';
 import ReactPlayer from 'react-player';
 import { io, Socket } from 'socket.io-client';
 import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon, Pencil, Shield } from 'lucide-react';
@@ -19,6 +19,7 @@ import {
   langFromFilename,
   mediaKeyFromUrl,
   parseTrackMap,
+  probeSidecarCaptions,
   toWebVtt,
 } from './lib/mediaTracks';
 
@@ -83,6 +84,7 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(shouldClaimRoomAdmin(roomId));
   const [viewerNames, setViewerNames] = useState<string[]>([]);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
+  const [detectedCaptions, setDetectedCaptions] = useState<CaptionTrack[]>([]);
   const [extraAudioTracks, setExtraAudioTracks] = useState<ExtraAudioTrack[]>([]);
   const [selectedCaptionId, setSelectedCaptionId] = useState('');
   const [selectedAudioId, setSelectedAudioId] = useState('default');
@@ -428,11 +430,25 @@ export default function App() {
   useEffect(() => {
     setSelectedCaptionId('');
     setSelectedAudioId('default');
+    setDetectedCaptions([]);
+    if (!url || !isUploadedVideo(url)) return;
+    let cancelled = false;
+    probeSidecarCaptions(url).then((rows) => {
+      if (!cancelled) setDetectedCaptions(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [url]);
+
+  const playableCaptions = useMemo(
+    () => [...detectedCaptions, ...captionTracks],
+    [detectedCaptions, captionTracks],
+  );
 
   useEffect(() => {
     const next: Record<string, string> = {};
-    for (const track of captionTracks) {
+    for (const track of playableCaptions) {
       if (track.vtt) next[track.id] = URL.createObjectURL(new Blob([track.vtt], { type: 'text/vtt' }));
       else if (track.url) next[track.id] = track.url;
     }
@@ -442,7 +458,7 @@ export default function App() {
         if (src.startsWith('blob:')) URL.revokeObjectURL(src);
       }
     };
-  }, [captionTracks]);
+  }, [playableCaptions]);
 
   const handleCaptionUpload = async (file: File) => {
     if (!isAdmin || !isUploadedVideo(url)) return;
@@ -797,7 +813,7 @@ export default function App() {
               onTimeUpdate={handleTimeUpdate}
               onSeeked={handleSeeked}
             >
-              {captionTracks.map((track) => (
+              {playableCaptions.map((track) => (
                 captionSrcById[track.id] ? (
                 <track
                   key={track.id}
@@ -805,6 +821,7 @@ export default function App() {
                   src={captionSrcById[track.id]}
                   srcLang={track.lang}
                   label={track.label}
+                  data-track-id={track.id}
                 />
                 ) : null
               ))}
@@ -836,7 +853,7 @@ export default function App() {
           <MediaTrackBar
             url={url}
             isAdmin={isAdmin}
-            captions={captionTracks}
+            captions={playableCaptions}
             extraAudio={extraAudioTracks}
             selectedCaptionId={selectedCaptionId}
             selectedAudioId={selectedAudioId}

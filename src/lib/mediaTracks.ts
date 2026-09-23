@@ -15,7 +15,7 @@ export type ExtraAudioTrack = {
 };
 
 export function isUploadedVideo(url: string): boolean {
-  if (!url) return false;
+  if (!url || url === 'local-stream' || url.startsWith('blob:')) return false;
   return !/youtube\.com|youtu\.be|vimeo\.com|wistia\.com/i.test(url);
 }
 

@@ -1,36 +1,19 @@
 import { deleteField, doc, getDoc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { getRtcConfig } from './rtcConfig';
 
 export const LOCAL_STREAM_URL = 'local-stream';
 export const MAX_CAST_PEERS = 8;
 
+const CHUNK_SIZE = 64 * 1024;
+const BUFFER_HIGH = 4 * 1024 * 1024;
+const BUFFER_LOW = 512 * 1024;
+
 type SdpBlob = { type: 'offer' | 'answer'; sdp: string; from: string; gen?: number };
 type IceBlob = { from: string; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null };
 
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-  ],
-};
-
 export function isLocalStreamUrl(url: string) {
   return url === LOCAL_STREAM_URL || url.startsWith('blob:');
-}
-
-export function captureVideoStream(video: HTMLVideoElement): MediaStream | null {
-  const media = video as HTMLVideoElement & {
-    captureStream?: (fps?: number) => MediaStream;
-    mozCaptureStream?: (fps?: number) => MediaStream;
-  };
-  const capture = media.captureStream || media.mozCaptureStream;
-  if (!capture) return null;
-  try {
-    const stream = capture.call(video);
-    return stream.getVideoTracks().length > 0 ? stream : null;
-  } catch {
-    return null;
-  }
 }
 
 function castDocId(roomId: string) {
@@ -63,6 +46,36 @@ async function patchCast(roomId: string, fields: Record<string, unknown>) {
   }
 }
 
+function waitForBuffer(dc: RTCDataChannel) {
+  if (dc.bufferedAmount <= BUFFER_LOW) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const onLow = () => {
+      dc.removeEventListener('bufferedamountlow', onLow);
+      resolve();
+    };
+    dc.bufferedAmountLowThreshold = BUFFER_LOW;
+    dc.addEventListener('bufferedamountlow', onLow);
+  });
+}
+
+async function sendFile(dc: RTCDataChannel, file: File, onProgress: (ratio: number) => void) {
+  dc.send(JSON.stringify({ type: 'meta', name: file.name, size: file.size, mime: file.type || 'video/mp4' }));
+  let offset = 0;
+  while (offset < file.size && dc.readyState === 'open') {
+    const slice = file.slice(offset, offset + CHUNK_SIZE);
+    const buf = await slice.arrayBuffer();
+    while (dc.readyState === 'open' && dc.bufferedAmount > BUFFER_HIGH) {
+      await waitForBuffer(dc);
+    }
+    if (dc.readyState !== 'open') return;
+    dc.send(buf);
+    offset += buf.byteLength;
+    onProgress(file.size ? offset / file.size : 1);
+  }
+  if (dc.readyState === 'open') dc.send(JSON.stringify({ type: 'done' }));
+  onProgress(1);
+}
+
 export type FileCastSession = {
   join: () => Promise<boolean>;
   destroy: () => void;
@@ -73,8 +86,9 @@ export function startFileCast(input: {
   uid: string;
   name: string;
   role: 'host' | 'guest';
-  stream?: MediaStream;
-  onRemoteStream?: (stream: MediaStream | null) => void;
+  file?: File;
+  onRemoteFile?: (file: Blob, name: string) => void;
+  onProgress?: (ratio: number) => void;
   onError: (message: string) => void;
 }): FileCastSession {
   const { roomId, uid, role } = input;
@@ -83,9 +97,8 @@ export function startFileCast(input: {
   const appliedOffer = new Map<string, string>();
   const appliedAnswer = new Map<string, string>();
   const appliedCandidates = new Set<string>();
-  const remoteTracks = new Map<string, MediaStreamTrack>();
+  const sendRatio = new Map<string, number>();
   const gen = Date.now();
-  let localStream = input.stream ?? null;
   let unsub: (() => void) | null = null;
   let closed = false;
   let members: Record<string, { name?: string; role?: string }> = {};
@@ -93,38 +106,101 @@ export function startFileCast(input: {
   let answers: Record<string, SdpBlob> = {};
   let candidates: Record<string, Record<string, IceBlob>> = {};
 
-  const publishRemote = () => {
-    if (role !== 'guest') return;
-    const tracks = [...remoteTracks.values()];
-    if (!tracks.length) {
-      input.onRemoteStream?.(null);
+  const publishSendProgress = () => {
+    if (role !== 'host' || !input.onProgress) return;
+    const values = [...sendRatio.values()];
+    if (!values.length) {
+      input.onProgress(0);
       return;
     }
-    input.onRemoteStream?.(new MediaStream(tracks));
+    input.onProgress(values.reduce((a, b) => a + b, 0) / values.length);
   };
 
   const closePeer = (peerUid: string) => {
-    const pc = peers.get(peerUid);
-    pc?.getSenders().forEach((sender) => sender.track?.stop());
-    pc?.close();
+    peers.get(peerUid)?.close();
     peers.delete(peerUid);
     makingOffer.delete(peerUid);
     appliedOffer.delete(peerUid);
     appliedAnswer.delete(peerUid);
+    sendRatio.delete(peerUid);
     for (const mark of [...appliedCandidates]) {
       if (mark.startsWith(`${peerUid}:`)) appliedCandidates.delete(mark);
     }
   };
 
+  const attachSender = (peerUid: string, dc: RTCDataChannel) => {
+    if (role !== 'host' || !input.file) return;
+    dc.binaryType = 'arraybuffer';
+    const start = () => {
+      void sendFile(dc, input.file!, (ratio) => {
+        sendRatio.set(peerUid, ratio);
+        publishSendProgress();
+      }).catch((err) => {
+        console.error(err);
+        input.onError('Failed to send the file.');
+      });
+    };
+    if (dc.readyState === 'open') start();
+    else dc.onopen = start;
+    dc.onerror = () => input.onError('File transfer interrupted.');
+  };
+
+  const attachReceiver = (dc: RTCDataChannel) => {
+    if (role !== 'guest') return;
+    dc.binaryType = 'arraybuffer';
+    let expected = 0;
+    let received = 0;
+    let name = 'video';
+    let mime = 'video/mp4';
+    const parts: ArrayBuffer[] = [];
+    dc.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        try {
+          const msg = JSON.parse(event.data) as { type?: string; name?: string; size?: number; mime?: string };
+          if (msg.type === 'meta') {
+            expected = typeof msg.size === 'number' ? msg.size : 0;
+            name = typeof msg.name === 'string' && msg.name.trim() ? msg.name.trim() : 'video';
+            mime = typeof msg.mime === 'string' && msg.mime ? msg.mime : 'video/mp4';
+            received = 0;
+            parts.length = 0;
+            input.onProgress?.(0);
+          } else if (msg.type === 'done') {
+            input.onProgress?.(1);
+            input.onRemoteFile?.(new Blob(parts, { type: mime }), name);
+          }
+        } catch {
+          input.onError('Invalid file transfer message.');
+        }
+        return;
+      }
+      const buf = event.data instanceof ArrayBuffer
+        ? event.data
+        : event.data instanceof Blob
+          ? null
+          : null;
+      if (buf) {
+        parts.push(buf);
+        received += buf.byteLength;
+        if (expected > 0) input.onProgress?.(Math.min(1, received / expected));
+      } else if (event.data instanceof Blob) {
+        void event.data.arrayBuffer().then((ab) => {
+          parts.push(ab);
+          received += ab.byteLength;
+          if (expected > 0) input.onProgress?.(Math.min(1, received / expected));
+        });
+      }
+    };
+  };
+
   const ensurePeer = (peerUid: string) => {
     let pc = peers.get(peerUid);
     if (pc) return pc;
-    pc = new RTCPeerConnection(RTC_CONFIG);
+    pc = new RTCPeerConnection(getRtcConfig());
     peers.set(peerUid, pc);
-    if (role === 'host' && localStream) {
-      localStream.getTracks().forEach((track) => {
-        pc!.addTrack(track.clone(), localStream!);
-      });
+    if (role === 'host') {
+      attachSender(peerUid, pc.createDataChannel('file', { ordered: true }));
+    } else {
+      pc.ondatachannel = (event) => attachReceiver(event.channel);
     }
     pc.onicecandidate = (event) => {
       if (!event.candidate || closed) return;
@@ -137,20 +213,6 @@ export function startFileCast(input: {
           sdpMLineIndex: event.candidate.sdpMLineIndex,
         },
       });
-    };
-    pc.ontrack = (event) => {
-      if (role !== 'guest') return;
-      const incoming = event.streams[0];
-      if (incoming) {
-        incoming.getTracks().forEach((track) => remoteTracks.set(track.kind, track));
-      } else {
-        remoteTracks.set(event.track.kind, event.track);
-      }
-      event.track.addEventListener('ended', () => {
-        remoteTracks.delete(event.track.kind);
-        publishRemote();
-      });
-      publishRemote();
     };
     pc.onconnectionstatechange = () => {
       if (pc?.connectionState === 'failed') {
@@ -192,7 +254,7 @@ export function startFileCast(input: {
   };
 
   const connectTo = async (peerUid: string) => {
-    if (closed || role !== 'host' || !localStream || peerUid === uid || makingOffer.has(peerUid)) return;
+    if (closed || role !== 'host' || peerUid === uid || makingOffer.has(peerUid)) return;
     const existing = peers.get(peerUid);
     if (existing && existing.signalingState !== 'stable') return;
     if (existing?.currentRemoteDescription) return;
@@ -237,7 +299,7 @@ export function startFileCast(input: {
       await flushCandidates(peerUid);
     } catch (err) {
       console.error(err);
-      input.onError('Could not start the live stream. Refresh and try again.');
+      input.onError('Could not start the file transfer. Refresh and try again.');
     }
   };
 
@@ -277,8 +339,8 @@ export function startFileCast(input: {
 
   const join = async () => {
     if (closed) return false;
-    if (role === 'host' && !localStream) {
-      input.onError('This browser cannot stream a local file. Try Chrome or Edge.');
+    if (role === 'host' && !input.file) {
+      input.onError('Choose a video file to share.');
       return false;
     }
 
@@ -289,7 +351,7 @@ export function startFileCast(input: {
         ? data.members as Record<string, unknown>
         : {};
       if (!raw[uid] && Object.keys(raw).length >= MAX_CAST_PEERS) {
-        input.onError('Local stream is full (max 8).');
+        input.onError('Room file share is full (max 8).');
         return false;
       }
     } catch {
@@ -307,7 +369,7 @@ export function startFileCast(input: {
         : {};
       const liveCount = Object.keys(members).length;
       if (!members[uid] && liveCount >= MAX_CAST_PEERS) {
-        input.onError('Local stream is full (max 8).');
+        input.onError('Room file share is full (max 8).');
         leave();
         return;
       }
@@ -334,8 +396,6 @@ export function startFileCast(input: {
     unsub?.();
     unsub = null;
     for (const id of [...peers.keys()]) closePeer(id);
-    remoteTracks.clear();
-    input.onRemoteStream?.(null);
     const fields: Record<string, unknown> = {
       [`members.${uid}`]: deleteField(),
     };

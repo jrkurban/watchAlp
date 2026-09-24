@@ -29,7 +29,6 @@ import {
   type VoiceSession,
 } from './lib/voiceChat';
 import {
-  captureVideoStream,
   LOCAL_STREAM_URL,
   startFileCast,
   type FileCastSession,
@@ -37,7 +36,6 @@ import {
 import {
   type CaptionTrack,
   type ExtraAudioTrack,
-  getHtmlVideo,
   isUploadedVideo,
   labelFromFilename,
   langFromFilename,
@@ -119,7 +117,7 @@ export default function App() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [castTitle, setCastTitle] = useState('');
   const [castError, setCastError] = useState<string | null>(null);
-  const [remoteCastStream, setRemoteCastStream] = useState<MediaStream | null>(null);
+  const [shareProgress, setShareProgress] = useState(0);
   const [isCastHost, setIsCastHost] = useState(false);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [detectedCaptions, setDetectedCaptions] = useState<CaptionTrack[]>([]);
@@ -139,7 +137,6 @@ export default function App() {
   const ignoreSeekUntil = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamInputRef = useRef<HTMLInputElement>(null);
-  const remoteCastRef = useRef<HTMLVideoElement | null>(null);
   const lastPlayedSeconds = useRef(0);
   const lastSyncSentAt = useRef(0);
   const pendingSync = useRef<{ time: number; playing: boolean } | null>(null);
@@ -266,7 +263,7 @@ export default function App() {
         if (liveUid) uidRef.current = liveUid;
         if (typeof data.currentVideoUrl === 'string') {
           if (data.currentVideoUrl === LOCAL_STREAM_URL) {
-            if (!isCastHostRef.current) setUrl(LOCAL_STREAM_URL);
+            if (!isCastHostRef.current && !localBlobUrlRef.current) setUrl(LOCAL_STREAM_URL);
             if (typeof data.streamTitle === 'string') setCastTitle(data.streamTitle);
           } else {
             setUrl((prevUrl) => (prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl));
@@ -499,7 +496,7 @@ export default function App() {
     fileCastRef.current = null;
     isCastHostRef.current = false;
     setIsCastHost(false);
-    setRemoteCastStream(null);
+    setShareProgress(0);
     setCastError(null);
     if (localBlobUrlRef.current) {
       URL.revokeObjectURL(localBlobUrlRef.current);
@@ -508,45 +505,22 @@ export default function App() {
     setCastTitle('');
   };
 
-  const startHostCastFromPlayer = () => {
-    if (!isCastHostRef.current || fileCastRef.current || !uidRef.current) return;
-    let tries = 0;
-    const attempt = () => {
-      if (!isCastHostRef.current || fileCastRef.current) return;
-      const video = getHtmlVideo(playerRef.current)
-        ?? (playerRef.current instanceof HTMLVideoElement ? playerRef.current : null);
-      const stream = video ? captureVideoStream(video) : null;
-      if (!stream) {
-        tries += 1;
-        if (tries < 12) {
-          window.setTimeout(attempt, 250);
-          return;
-        }
-        setCastError('This browser cannot stream a local file. Try Chrome or Edge.');
-        return;
-      }
-      const session = startFileCast({
-        roomId,
-        uid: uidRef.current,
-        name: displayNameRef.current,
-        role: 'host',
-        stream,
-        onError: setCastError,
-      });
-      fileCastRef.current = session;
-      void session.join();
-    };
-    attempt();
-  };
-
   useEffect(() => {
-    if (!uid || !isAuthReady || isBanned || isCastHost || url !== LOCAL_STREAM_URL) return;
+    if (!uid || !isAuthReady || isBanned || isCastHost || url !== LOCAL_STREAM_URL || localBlobUrlRef.current) return;
     const session = startFileCast({
       roomId,
       uid,
       name: displayNameRef.current,
       role: 'guest',
-      onRemoteStream: setRemoteCastStream,
+      onProgress: setShareProgress,
+      onRemoteFile: (blob, name) => {
+        if (localBlobUrlRef.current) URL.revokeObjectURL(localBlobUrlRef.current);
+        const blobUrl = URL.createObjectURL(blob);
+        localBlobUrlRef.current = blobUrl;
+        setCastTitle(name);
+        setUrl(blobUrl);
+        setShareProgress(1);
+      },
       onError: setCastError,
     });
     fileCastRef.current = session;
@@ -554,20 +528,8 @@ export default function App() {
     return () => {
       session.destroy();
       if (fileCastRef.current === session) fileCastRef.current = null;
-      setRemoteCastStream(null);
     };
   }, [uid, roomId, isAuthReady, isBanned, isCastHost, url]);
-
-  useEffect(() => {
-    const el = remoteCastRef.current;
-    if (!el) return;
-    if (el.srcObject !== remoteCastStream) el.srcObject = remoteCastStream;
-    if (remoteCastStream) {
-      el.autoplay = true;
-      el.playsInline = true;
-      void el.play().catch(() => setNeedsUnlock(true));
-    }
-  }, [remoteCastStream, url, isCastHost]);
 
   useEffect(() => {
     if (!isBanned) return;
@@ -821,11 +783,27 @@ export default function App() {
     localBlobUrlRef.current = blobUrl;
     setCastTitle(file.name);
     setCastError(null);
+    setShareProgress(0);
     setUrl(blobUrl);
     setPlaying(true);
     lastPlayedSeconds.current = 0;
     socketRef.current?.emit('videoStateUpdate', { roomId, state: { url: LOCAL_STREAM_URL } });
     void writePlayback({ currentVideoUrl: LOCAL_STREAM_URL, playing: true, time: 0, streamTitle: file.name });
+    if (!uidRef.current) {
+      setCastError('Wait until Connected, then share the file again.');
+      return;
+    }
+    const session = startFileCast({
+      roomId,
+      uid: uidRef.current,
+      name: displayNameRef.current,
+      role: 'host',
+      file,
+      onProgress: setShareProgress,
+      onError: setCastError,
+    });
+    fileCastRef.current = session;
+    void session.join();
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1081,7 +1059,7 @@ export default function App() {
                             type="button"
                             onClick={() => streamInputRef.current?.click()}
                             disabled={!isAuthReady}
-                            title="Play a file from this computer. Others watch live — nothing is uploaded."
+                            title="Copy this file to others in the room, then play in sync. Nothing is uploaded to the server."
                             className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-200 font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap disabled:opacity-50 h-full"
                         >
                             <Cast className="w-5 h-5" />
@@ -1118,8 +1096,8 @@ export default function App() {
                 <Shield className="w-5 h-5 text-indigo-500 shrink-0" />
                 <p className="text-sm">
                   {url === LOCAL_STREAM_URL
-                    ? `Admin is streaming${castTitle ? `: ${castTitle}` : ' a local file'}.`
-                    : 'Only the room admin can paste a link, upload, or stream a local file. You can watch and chat.'}
+                    ? `Receiving ${castTitle || 'the file'} from the admin…`
+                    : 'Only the room admin can paste a link, upload, or share a local file. You can watch and chat.'}
                 </p>
               </div>
             )}
@@ -1127,27 +1105,14 @@ export default function App() {
 
         <div className="bg-black rounded-2xl overflow-hidden shadow-xl aspect-video relative group">
           {url === LOCAL_STREAM_URL && !isCastHost ? (
-            <>
-              <video
-                ref={(el) => {
-                  remoteCastRef.current = el;
-                  if (el && remoteCastStream && el.srcObject !== remoteCastStream) {
-                    el.srcObject = remoteCastStream;
-                    void el.play().catch(() => setNeedsUnlock(true));
-                  }
-                }}
-                className="absolute inset-0 w-full h-full object-contain bg-black"
-                autoPlay
-                playsInline
-                controls
-              />
-              {!remoteCastStream ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-stone-400">
-                  <Cast className="w-10 h-10 text-stone-600" />
-                  <p className="text-sm">{castError || 'Connecting to host stream…'}</p>
-                </div>
-              ) : null}
-            </>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-300 px-8">
+              <Cast className="w-10 h-10 text-stone-500" />
+              <p className="text-sm text-center">{castError || `Receiving ${castTitle || 'file'} onto this device…`}</p>
+              <div className="w-full max-w-xs h-1.5 bg-stone-800 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 transition-all" style={{ width: `${Math.round(shareProgress * 100)}%` }} />
+              </div>
+              <p className="text-xs text-stone-500 tabular-nums">{Math.round(shareProgress * 100)}%</p>
+            </div>
           ) : url ? (
             <ReactPlayer
               ref={playerRef}
@@ -1160,12 +1125,8 @@ export default function App() {
               onReady={() => {
                 applyPendingSync();
                 setPlayerReadyTick((tick) => tick + 1);
-                startHostCastFromPlayer();
               }}
-              onPlay={() => {
-                handlePlay();
-                startHostCastFromPlayer();
-              }}
+              onPlay={handlePlay}
               onPause={handlePause}
               onTimeUpdate={handleTimeUpdate}
               onSeeked={handleSeeked}
@@ -1187,14 +1148,17 @@ export default function App() {
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-400">
               <Video className="w-12 h-12 text-stone-600" />
               <p className="text-sm">
-                {isAdmin ? 'Paste a URL, upload, or stream a file from this computer.' : 'Waiting for the admin to add a video.'}
+                {isAdmin ? 'Paste a URL, upload, or share a file from this computer.' : 'Waiting for the admin to add a video.'}
               </p>
             </div>
           )}
           {(isCastHost || url === LOCAL_STREAM_URL) && (
             <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg bg-black/60 px-2.5 py-1 text-xs text-white">
               <Cast className="w-3.5 h-3.5" />
-              <span className="max-w-[14rem] truncate">{castTitle || 'Local stream'}</span>
+              <span className="max-w-[14rem] truncate">{castTitle || 'Shared file'}</span>
+              {shareProgress > 0 && shareProgress < 1 ? (
+                <span className="tabular-nums">{Math.round(shareProgress * 100)}%</span>
+              ) : null}
             </div>
           )}
           {castError ? (
@@ -1208,11 +1172,7 @@ export default function App() {
               onClick={() => {
                 setNeedsUnlock(false);
                 setPlaying(true);
-                if (url === LOCAL_STREAM_URL) {
-                  void remoteCastRef.current?.play();
-                } else {
-                  void getMedia(playerRef.current)?.play?.();
-                }
+                void getMedia(playerRef.current)?.play?.();
               }}
               className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/70 text-white"
             >
@@ -1246,7 +1206,7 @@ export default function App() {
                     <h3 className="font-semibold text-indigo-900 dark:text-indigo-300">Room: {roomId}</h3>
                     <p className="text-indigo-700 dark:text-indigo-400/80 text-sm mt-1 max-w-xl">
                         {url === LOCAL_STREAM_URL || isCastHost
-                          ? `Streaming from a computer${castTitle ? `: ${castTitle}` : ''}. Host controls playback.`
+                          ? `Sharing a file${castTitle ? `: ${castTitle}` : ''}. Others play a local copy in sync.`
                           : isAdmin
                             ? 'You are the admin. Open People to grant admin or ban someone.'
                             : 'Share this page with a friend. Play, pause, and seek stay in sync.'}

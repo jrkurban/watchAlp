@@ -1,5 +1,6 @@
 import { deleteField, doc, getDoc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { getRtcConfig } from './rtcConfig';
 
 export const MAX_VOICE_PEERS = 8;
 
@@ -10,12 +11,6 @@ export type VoiceMember = {
 };
 
 type SdpBlob = { type: 'offer' | 'answer'; sdp: string; from: string };
-
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-  ],
-};
 
 export function voiceDocId(roomId: string) {
   return `${roomId}__voice`;
@@ -136,7 +131,7 @@ export function startVoiceSession(input: {
   const ensurePeer = (peerUid: string) => {
     let pc = peers.get(peerUid);
     if (pc) return pc;
-    pc = new RTCPeerConnection(RTC_CONFIG);
+    pc = new RTCPeerConnection(getRtcConfig());
     peers.set(peerUid, pc);
     localStream?.getTracks().forEach((track) => pc!.addTrack(track, localStream!));
     pc.ontrack = (event) => {

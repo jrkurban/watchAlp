@@ -510,23 +510,33 @@ export default function App() {
 
   const startHostCastFromPlayer = () => {
     if (!isCastHostRef.current || fileCastRef.current || !uidRef.current) return;
-    const video = getHtmlVideo(playerRef.current) ?? (playerRef.current instanceof HTMLVideoElement ? playerRef.current : null);
-    if (!video) return;
-    const stream = captureVideoStream(video);
-    if (!stream) {
-      setCastError('This browser cannot stream a local file. Try Chrome or Edge.');
-      return;
-    }
-    const session = startFileCast({
-      roomId,
-      uid: uidRef.current,
-      name: displayNameRef.current,
-      role: 'host',
-      stream,
-      onError: setCastError,
-    });
-    fileCastRef.current = session;
-    void session.join();
+    let tries = 0;
+    const attempt = () => {
+      if (!isCastHostRef.current || fileCastRef.current) return;
+      const video = getHtmlVideo(playerRef.current)
+        ?? (playerRef.current instanceof HTMLVideoElement ? playerRef.current : null);
+      const stream = video ? captureVideoStream(video) : null;
+      if (!stream) {
+        tries += 1;
+        if (tries < 12) {
+          window.setTimeout(attempt, 250);
+          return;
+        }
+        setCastError('This browser cannot stream a local file. Try Chrome or Edge.');
+        return;
+      }
+      const session = startFileCast({
+        roomId,
+        uid: uidRef.current,
+        name: displayNameRef.current,
+        role: 'host',
+        stream,
+        onError: setCastError,
+      });
+      fileCastRef.current = session;
+      void session.join();
+    };
+    attempt();
   };
 
   useEffect(() => {
@@ -551,11 +561,13 @@ export default function App() {
   useEffect(() => {
     const el = remoteCastRef.current;
     if (!el) return;
-    el.srcObject = remoteCastStream;
+    if (el.srcObject !== remoteCastStream) el.srcObject = remoteCastStream;
     if (remoteCastStream) {
+      el.autoplay = true;
+      el.playsInline = true;
       void el.play().catch(() => setNeedsUnlock(true));
     }
-  }, [remoteCastStream]);
+  }, [remoteCastStream, url, isCastHost]);
 
   useEffect(() => {
     if (!isBanned) return;
@@ -1117,15 +1129,22 @@ export default function App() {
           {url === LOCAL_STREAM_URL && !isCastHost ? (
             <>
               <video
-                ref={remoteCastRef}
+                ref={(el) => {
+                  remoteCastRef.current = el;
+                  if (el && remoteCastStream && el.srcObject !== remoteCastStream) {
+                    el.srcObject = remoteCastStream;
+                    void el.play().catch(() => setNeedsUnlock(true));
+                  }
+                }}
                 className="absolute inset-0 w-full h-full object-contain bg-black"
                 autoPlay
                 playsInline
+                controls
               />
               {!remoteCastStream ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-stone-400">
                   <Cast className="w-10 h-10 text-stone-600" />
-                  <p className="text-sm">Connecting to host stream…</p>
+                  <p className="text-sm">{castError || 'Connecting to host stream…'}</p>
                 </div>
               ) : null}
             </>

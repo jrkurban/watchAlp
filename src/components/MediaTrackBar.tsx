@@ -192,7 +192,7 @@ export function MediaTrackBar({
         <select
           value={selectedAudioId}
           onChange={(e) => onAudioChange(e.target.value)}
-          className="flex-1 min-w-0 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2 text-sm"
+          className="flex-1 min-w-0 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-base sm:text-sm"
         >
           <option value="default">Default</option>
           {embeddedAudio.map((track) => (
@@ -218,7 +218,7 @@ export function MediaTrackBar({
             <button
               type="button"
               onClick={() => audioInputRef.current?.click()}
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800"
+              className="shrink-0 inline-flex items-center gap-1.5 min-h-11 px-3 py-2 text-sm rounded-lg border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800"
               title="Upload audio track"
             >
               <Upload className="w-4 h-4" />
@@ -234,7 +234,7 @@ export function MediaTrackBar({
         <select
           value={selectedCaptionId}
           onChange={(e) => onCaptionChange(e.target.value)}
-          className="flex-1 min-w-0 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2 text-sm"
+          className="flex-1 min-w-0 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2.5 text-base sm:text-sm"
         >
           <option value="">Off</option>
           {embeddedCaptions.length > 0 ? (
@@ -268,7 +268,7 @@ export function MediaTrackBar({
             <button
               type="button"
               onClick={() => captionInputRef.current?.click()}
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800"
+              className="shrink-0 inline-flex items-center gap-1.5 min-h-11 px-3 py-2 text-sm rounded-lg border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800"
               title="Upload subtitles"
             >
               <Upload className="w-4 h-4" />

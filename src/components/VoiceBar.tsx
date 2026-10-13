@@ -37,7 +37,7 @@ export function VoiceBar({
           <button
             type="button"
             onClick={onToggleMute}
-            className={`p-2 rounded-lg transition-colors ${muted ? 'bg-rose-100 text-rose-600 dark:bg-rose-950/50 dark:text-rose-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'}`}
+            className={`min-h-11 min-w-11 p-2 rounded-lg transition-colors ${muted ? 'bg-rose-100 text-rose-600 dark:bg-rose-950/50 dark:text-rose-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'}`}
             title={muted ? 'Unmute' : 'Mute'}
           >
             {muted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -45,7 +45,7 @@ export function VoiceBar({
           <button
             type="button"
             onClick={onLeave}
-            className="p-2 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
+            className="min-h-11 min-w-11 p-2 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
             title="Leave voice"
           >
             <PhoneOff className="w-4 h-4" />
@@ -60,7 +60,7 @@ export function VoiceBar({
           type="button"
           onClick={onJoin}
           disabled={disabled || joining || members.length >= MAX_VOICE_PEERS}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 hover:bg-stone-200 dark:hover:bg-stone-700 disabled:opacity-50"
+          className="flex items-center gap-2 min-h-11 px-3 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 hover:bg-stone-200 dark:hover:bg-stone-700 disabled:opacity-50"
           title="Join voice chat"
         >
           <Mic className="w-4 h-4 text-indigo-500" />

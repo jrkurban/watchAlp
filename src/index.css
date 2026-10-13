@@ -1,2 +1,18 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
+
+html,
+body {
+  overflow-x: hidden;
+}
+
+body {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+button,
+a,
+[type="button"],
+[type="submit"] {
+  touch-action: manipulation;
+}

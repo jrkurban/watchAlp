@@ -60,7 +60,7 @@ export function RoomMembers({
                         <button
                           type="button"
                           onClick={() => onRevokeAdmin(member.uid)}
-                          className="p-2 rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
+                          className="min-h-11 min-w-11 p-2 rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
                           title="Remove admin"
                         >
                           <ShieldOff className="w-4 h-4" />
@@ -69,7 +69,7 @@ export function RoomMembers({
                         <button
                           type="button"
                           onClick={() => onGrantAdmin(member.uid)}
-                          className="p-2 rounded-lg text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                          className="min-h-11 min-w-11 p-2 rounded-lg text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
                           title="Make admin"
                         >
                           <Shield className="w-4 h-4" />
@@ -78,7 +78,7 @@ export function RoomMembers({
                       <button
                         type="button"
                         onClick={() => onBan(member)}
-                        className="p-2 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                        className="min-h-11 min-w-11 p-2 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40"
                         title="Ban user"
                       >
                         <UserX className="w-4 h-4" />

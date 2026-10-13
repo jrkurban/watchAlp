@@ -576,13 +576,12 @@ export default function App() {
           setDriveMode('iframe');
           return;
         }
-        setDriveSrc(`/api/drive-file?id=${encodeURIComponent(fileId)}`);
-        setDriveMode('file');
       } catch {
         if (cancelled) return;
-        setDriveSrc(preview);
-        setDriveMode('iframe');
       }
+      if (cancelled) return;
+      setDriveSrc(`/api/drive-file?id=${encodeURIComponent(fileId)}`);
+      setDriveMode('file');
     };
     void load();
     return () => {
@@ -858,15 +857,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-50 dark:bg-stone-900 text-stone-900 dark:text-stone-100 font-sans selection:bg-stone-200 dark:selection:bg-stone-700 transition-colors duration-200">
-      <header className="bg-white dark:bg-stone-950 border-b border-stone-200 dark:border-stone-800 px-6 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm transition-colors duration-200">
-        <a href="/" className="flex items-center gap-3">
-            <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-sm">
+      <header className="bg-white dark:bg-stone-950 border-b border-stone-200 dark:border-stone-800 px-3 sm:px-6 py-2.5 sm:py-4 flex items-center justify-between gap-2 sticky top-0 z-20 shadow-sm transition-colors duration-200 pt-[max(0.625rem,env(safe-area-inset-top))]">
+        <a href="/" className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-sm shrink-0">
                 <Video className="w-5 h-5" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100">Apeiron Watch</h1>
+            <h1 className="text-base sm:text-xl font-bold tracking-tight text-stone-800 dark:text-stone-100 truncate">
+              <span className="sm:hidden">Apeiron</span>
+              <span className="hidden sm:inline">Apeiron Watch</span>
+            </h1>
         </a>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
             {isEditingName ? (
               <form
                 className="flex items-center gap-2"
@@ -880,7 +882,7 @@ export default function App() {
                   value={nameDraft}
                   maxLength={USERNAME_MAX}
                   onChange={(e) => setNameDraft(e.target.value)}
-                  className="w-36 md:w-44 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-1.5 text-sm"
+                  className="w-28 sm:w-36 md:w-44 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg px-3 py-2 text-base sm:text-sm"
                 />
                 <button
                   type="submit"
@@ -897,10 +899,10 @@ export default function App() {
                   setNameDraft(displayName);
                   setIsEditingName(true);
                 }}
-                className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+                className="flex items-center gap-1.5 sm:gap-2 min-h-11 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-2 sm:px-3 py-1.5 rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
                 title="Change username"
               >
-                <span className="text-sm font-semibold truncate max-w-[9rem] md:max-w-[12rem]">{displayName}</span>
+                <span className="text-sm font-semibold truncate max-w-[4.5rem] sm:max-w-[9rem] md:max-w-[12rem]">{displayName}</span>
                 {isAdmin ? <Shield className="w-3.5 h-3.5 text-indigo-500" /> : null}
                 <Pencil className="w-3.5 h-3.5 text-stone-400" />
               </button>
@@ -908,12 +910,12 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShowPeople(true)}
-              className="flex items-center gap-2 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-3 py-1.5 rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+              className="flex items-center gap-1.5 sm:gap-2 min-h-11 bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 px-2 sm:px-3 py-1.5 rounded-lg hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
               title="People in this room"
             >
                 <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 <span className="text-sm font-semibold tabular-nums">{userCount}</span>
-                <span className="text-sm font-medium">online</span>
+                <span className="hidden sm:inline text-sm font-medium">online</span>
             </button>
             <VoiceBar
               inVoice={inVoice}
@@ -929,14 +931,14 @@ export default function App() {
             />
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-lg transition-colors"
+              className="min-h-11 min-w-11 p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-lg transition-colors"
               title="Toggle theme"
             >
               {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" title={isAuthReady ? 'Connected' : 'Connecting'}>
                 <div className={`w-2 h-2 rounded-full ${isAuthReady ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                <span className="text-sm font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider">
+                <span className="hidden md:inline text-sm font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider">
                     {isAuthReady ? 'Connected' : 'Connecting'}
                 </span>
             </div>
@@ -954,10 +956,10 @@ export default function App() {
           </div>
         </main>
       ) : (
-      <main className="max-w-7xl mx-auto p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <main className="max-w-7xl mx-auto p-3 sm:p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
 
-        <div className="lg:col-span-2 space-y-8 order-1">
-            <div className="bg-white dark:bg-stone-950 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-800 p-6 transition-colors duration-200">
+        <div className="lg:col-span-2 space-y-4 sm:space-y-8 order-1">
+            <div className="bg-white dark:bg-stone-950 rounded-2xl shadow-sm border border-stone-200 dark:border-stone-800 p-3 sm:p-6 transition-colors duration-200">
             {isAdmin ? (
             <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4">
                 <form onSubmit={handleUrlSubmit} className="flex flex-1 items-center gap-3">
@@ -969,16 +971,16 @@ export default function App() {
                             type="url"
                             value={inputUrl}
                             onChange={(e) => setInputUrl(e.target.value)}
-                            placeholder="Paste YouTube, Vimeo, Google Drive, or video URL..."
-                            className="block w-full pl-10 pr-4 py-3 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow text-stone-800 dark:text-stone-100 dark:placeholder-stone-500"
+                            placeholder="YouTube, Drive, or video URL"
+                            className="block w-full pl-10 pr-4 py-3 text-base sm:text-sm bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow text-stone-800 dark:text-stone-100 dark:placeholder-stone-500"
                         />
                     </div>
                     <button
                         type="submit"
                         disabled={!isAuthReady || linkResolving}
-                        className="bg-stone-900 hover:bg-stone-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap h-full disabled:opacity-50"
+                        className="min-h-11 bg-stone-900 hover:bg-stone-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-medium py-3 px-4 sm:px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap h-full disabled:opacity-50"
                     >
-                        {linkResolving ? 'Opening…' : 'Load Video'}
+                        {linkResolving ? 'Opening…' : 'Load'}
                     </button>
                 </form>
 
@@ -998,17 +1000,17 @@ export default function App() {
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
                             disabled={isUploading || !isAuthReady}
-                            className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-200 font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed h-full"
+                            className="flex flex-1 md:flex-none items-center justify-center gap-2 min-h-11 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-200 font-medium py-3 px-4 sm:px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed h-full"
                         >
                             <Upload className="w-5 h-5" />
-                            {isUploading ? `Uploading ${uploadProgress}%` : 'Upload Video'}
+                            {isUploading ? `${uploadProgress}%` : 'Upload'}
                         </button>
                         <button
                             type="button"
                             onClick={() => setShowVideoList(true)}
                             title="Video Library"
                             disabled={!isAuthReady}
-                            className="flex items-center justify-center bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 border border-stone-300 dark:border-stone-700 p-3 rounded-xl transition-colors shadow-sm h-full disabled:opacity-50"
+                            className="flex items-center justify-center min-h-11 min-w-11 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 border border-stone-300 dark:border-stone-700 p-3 rounded-xl transition-colors shadow-sm h-full disabled:opacity-50"
                         >
                             <List className="w-5 h-5" />
                         </button>
@@ -1017,7 +1019,7 @@ export default function App() {
                             onClick={handleClearVideo}
                             title="Clear and Delete Current Video"
                             disabled={!url}
-                            className="flex items-center justify-center bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900 p-3 rounded-xl transition-colors shadow-sm h-full disabled:opacity-50"
+                            className="flex items-center justify-center min-h-11 min-w-11 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900 p-3 rounded-xl transition-colors shadow-sm h-full disabled:opacity-50"
                         >
                             <Trash2 className="w-5 h-5" />
                         </button>
@@ -1056,7 +1058,7 @@ export default function App() {
             <iframe
               src={driveSrc}
               className="absolute inset-0 w-full h-full border-0"
-              allow="autoplay; fullscreen; encrypted-media"
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               allowFullScreen
               referrerPolicy="no-referrer"
               title="Google Drive video"
@@ -1069,17 +1071,15 @@ export default function App() {
               height="100%"
               playing={playing}
               controls={true}
+              playsInline
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
               onReady={() => {
                 applyPendingSync();
                 setPlayerReadyTick((tick) => tick + 1);
               }}
               onError={() => {
-                const fileId = parseDriveFileId(url);
-                if (fileId) {
-                  setDriveSrc(drivePreviewUrl(fileId));
-                  setDriveMode('iframe');
-                  return;
+                if (parseDriveFileId(url)) {
+                  setLinkError('Could not play this Drive file. Share it as Anyone with the link, then tap Load again.');
                 }
               }}
               onPlay={handlePlay}
@@ -1101,10 +1101,10 @@ export default function App() {
               ))}
             </ReactPlayer>
           ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-400">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-400 px-4">
               <Video className="w-12 h-12 text-stone-600" />
-              <p className="text-sm">
-                {isAdmin ? 'Paste a YouTube, Vimeo, Google Drive, or video URL — or upload a file.' : 'Waiting for the admin to add a video.'}
+              <p className="text-sm text-center max-w-full">
+                {isAdmin ? 'Paste a URL or upload a file to start.' : 'Waiting for the admin to add a video.'}
               </p>
             </div>
           )}
@@ -1129,7 +1129,7 @@ export default function App() {
               className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/70 text-white"
             >
               <Play className="w-12 h-12" />
-              <span className="text-sm font-medium">Click to sync playback</span>
+              <span className="text-sm font-medium">Tap to sync playback</span>
             </button>
           )}
         </div>
@@ -1151,11 +1151,11 @@ export default function App() {
           />
         ) : null}
 
-        <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-xl p-5 flex items-start gap-4 justify-between transition-colors">
-            <div className="flex items-start gap-4">
+        <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row items-stretch sm:items-start gap-3 sm:gap-4 justify-between transition-colors">
+            <div className="flex items-start gap-3 sm:gap-4 min-w-0">
                 <Users className="w-6 h-6 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-                <div>
-                    <h3 className="font-semibold text-indigo-900 dark:text-indigo-300">Room: {roomId}</h3>
+                <div className="min-w-0">
+                    <h3 className="font-semibold text-indigo-900 dark:text-indigo-300 truncate">Room: {roomId}</h3>
                     <p className="text-indigo-700 dark:text-indigo-400/80 text-sm mt-1 max-w-xl">
                         {isAdmin
                             ? 'You are the admin. Open People to grant admin or ban someone.'
@@ -1168,14 +1168,14 @@ export default function App() {
 
             <button
                 onClick={() => {
-                    navigator.clipboard.writeText(window.location.href);
+                    void navigator.clipboard.writeText(window.location.href);
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                 }}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0"
+                className="flex items-center justify-center gap-2 min-h-11 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shrink-0 w-full sm:w-auto"
             >
                 {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                {copied ? 'Copied!' : 'Copy Invite Link'}
+                {copied ? 'Copied!' : 'Copy invite'}
             </button>
         </div>
         </div>
@@ -1226,16 +1226,16 @@ export default function App() {
               ) : (
                 <ul className="space-y-3">
                   {uploadedVideos.map((video, idx) => (
-                    <li key={idx} className="flex items-center justify-between p-3 rounded-xl border border-stone-100 dark:border-stone-800 hover:border-indigo-200 dark:hover:border-indigo-500/30 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 transition-colors group">
-                      <div className="flex items-center gap-3 truncate">
-                        <div className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg text-indigo-600 dark:text-indigo-400">
+                    <li key={idx} className="flex items-center justify-between gap-2 p-3 rounded-xl border border-stone-100 dark:border-stone-800 hover:border-indigo-200 dark:hover:border-indigo-500/30 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/20 transition-colors group">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg text-indigo-600 dark:text-indigo-400 shrink-0">
                           <Play className="w-4 h-4" />
                         </div>
                         <span className="font-medium text-stone-700 dark:text-stone-300 truncate" title={video.name}>
                           {video.name.replace(/^\d+_/, '')}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-2 shrink-0 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => {
                             if (!isAdmin) return;

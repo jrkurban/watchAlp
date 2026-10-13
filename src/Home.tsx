@@ -34,7 +34,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100">
-      <header className="px-6 py-4 flex items-center justify-between border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-950">
+      <header className="px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-950 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="flex items-center gap-3">
           <div className="bg-indigo-600 p-2 rounded-lg text-white">
             <Video className="w-5 h-5" />
@@ -51,9 +51,9 @@ export default function Home() {
         </button>
       </header>
 
-      <main className="max-w-3xl mx-auto px-6 py-16 md:py-24">
+      <main className="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-16 md:py-24">
         <p className="text-sm font-medium text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Watch together</p>
-        <h1 className="text-4xl md:text-5xl font-bold tracking-tight mt-3">
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight mt-3">
           Aynı videoyu, aynı anda izleyin.
         </h1>
         <p className="text-stone-600 dark:text-stone-400 text-lg mt-4 max-w-xl">
@@ -73,7 +73,7 @@ export default function Home() {
                 markAsRoomHost(id);
                 goToRoom(id);
               }}
-              className="mt-5 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-3 rounded-xl"
+              className="mt-5 inline-flex items-center justify-center gap-2 min-h-12 w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-3 rounded-xl"
             >
               Oda oluştur
               <ArrowRight className="w-4 h-4" />
@@ -96,12 +96,14 @@ export default function Home() {
               value={roomCode}
               onChange={(e) => setRoomCode(e.target.value)}
               placeholder="Oda kodu"
-              className="mt-4 w-full rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-950 px-4 py-3"
+              className="mt-4 w-full rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-950 px-4 py-3 text-base"
+              autoCapitalize="none"
+              autoCorrect="off"
             />
             <button
               type="submit"
               disabled={!roomCode.trim()}
-              className="mt-3 inline-flex items-center gap-2 bg-stone-900 dark:bg-stone-100 dark:text-stone-900 hover:bg-stone-800 text-white font-medium px-5 py-3 rounded-xl disabled:opacity-40"
+              className="mt-3 inline-flex items-center justify-center gap-2 min-h-12 w-full sm:w-auto bg-stone-900 dark:bg-stone-100 dark:text-stone-900 hover:bg-stone-800 text-white font-medium px-5 py-3 rounded-xl disabled:opacity-40"
             >
               Katıl
             </button>

@@ -37,6 +37,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       const value = upstream.headers.get(name);
       if (value) res.setHeader(name, value);
     }
+    res.setHeader('Accept-Ranges', 'bytes');
     if (!upstream.body) {
       res.end();
       return;

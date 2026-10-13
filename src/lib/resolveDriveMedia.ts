@@ -1,5 +1,15 @@
 const FILE_ID_RE = /^[\w-]{10,128}$/;
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const MAX_PROXY_CHUNK = 4 * 1024 * 1024;
+
+export function clampDriveRange(range?: string): string {
+  const match = range?.match(/bytes=(\d+)-(\d*)/);
+  const start = match ? Number(match[1]) : 0;
+  const requestedEnd = match && match[2] ? Number(match[2]) : undefined;
+  const capEnd = start + MAX_PROXY_CHUNK - 1;
+  const end = Number.isFinite(requestedEnd) ? Math.min(requestedEnd as number, capEnd) : capEnd;
+  return `bytes=${start}-${end}`;
+}
 
 export type DriveMediaResult = {
   url: string;
@@ -81,8 +91,8 @@ export async function openDriveFile(fileId: string, range?: string): Promise<Res
   const headers: Record<string, string> = {
     'User-Agent': UA,
     Accept: '*/*',
+    Range: clampDriveRange(range),
   };
-  if (range) headers.Range = range;
 
   const request = (url: string, cookie = '') => {
     const next = { ...headers };

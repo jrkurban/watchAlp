@@ -36,6 +36,10 @@ export function canonicalDriveUrl(fileId: string): string {
   return `https://drive.google.com/file/d/${fileId}/view`;
 }
 
+export function drivePreviewUrl(fileId: string): string {
+  return `https://drive.google.com/file/d/${fileId}/preview`;
+}
+
 export function driveApiPlaybackUrl(fileId: string): string {
   return `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${encodeURIComponent(driveApiKey())}`;
 }

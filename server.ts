@@ -1,9 +1,11 @@
 import express from 'express';
 import { createServer } from 'http';
+import { Readable } from 'node:stream';
 import { Server } from 'socket.io';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createVisitorStore, getClientIp } from './visitor-log';
+import { openDriveFile, resolveDriveMediaUrl } from './src/lib/resolveDriveMedia';
 
 type RoomPlayback = {
   url?: string;
@@ -116,6 +118,48 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  app.get('/api/drive-url', async (req, res) => {
+    const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!id) {
+      res.status(400).json({ error: 'missing id' });
+      return;
+    }
+    try {
+      const result = await resolveDriveMediaUrl(id);
+      res.setHeader('Cache-Control', 'public, max-age=30');
+      res.json(result);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Could not open this Drive file.' });
+    }
+  });
+
+  app.get('/api/drive-file', async (req, res) => {
+    const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!id) {
+      res.status(400).json({ error: 'missing id' });
+      return;
+    }
+    try {
+      const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+      const upstream = await openDriveFile(id, range);
+      res.status(upstream.status);
+      for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'etag', 'last-modified']) {
+        const value = upstream.headers.get(name);
+        if (value) res.setHeader(name, value);
+      }
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+      Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream).pipe(res);
+    } catch (err) {
+      console.error(err);
+      if (!res.headersSent) res.status(502).json({ error: 'Could not stream this Drive file.' });
+      else res.end();
+    }
   });
 
   app.post('/api/session', async (req, res) => {

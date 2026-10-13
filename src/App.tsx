@@ -29,9 +29,9 @@ import {
   type VoiceSession,
 } from './lib/voiceChat';
 import {
+  drivePreviewUrl,
   isDriveUrl,
   parseDriveFileId,
-  playableVideoUrl,
   resolveDriveLink,
 } from './lib/googleDrive';
 import {
@@ -118,7 +118,8 @@ export default function App() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkResolving, setLinkResolving] = useState(false);
-  const [driveUseApi, setDriveUseApi] = useState(false);
+  const [driveMode, setDriveMode] = useState<'off' | 'loading' | 'file' | 'iframe'>('off');
+  const [driveSrc, setDriveSrc] = useState('');
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [detectedCaptions, setDetectedCaptions] = useState<CaptionTrack[]>([]);
   const [extraAudioTracks, setExtraAudioTracks] = useState<ExtraAudioTrack[]>([]);
@@ -544,7 +545,6 @@ export default function App() {
   const updateRoomState = async (newUrl: string) => {
     if (!isAdmin) return;
     setLinkError(null);
-    setDriveUseApi(false);
     setUrl(newUrl);
     setPlaying(false);
     lastPlayedSeconds.current = 0;
@@ -553,8 +553,41 @@ export default function App() {
   };
 
   useEffect(() => {
-    setDriveUseApi(false);
     setLinkError(null);
+    setNeedsUnlock(false);
+    const fileId = parseDriveFileId(url);
+    if (!fileId) {
+      setDriveMode('off');
+      setDriveSrc('');
+      return;
+    }
+    setDriveMode('loading');
+    setDriveSrc('');
+    const preview = drivePreviewUrl(fileId);
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/drive-url?id=${encodeURIComponent(fileId)}`);
+        const data = await res.json() as { url?: string; kind?: string; error?: string };
+        if (cancelled) return;
+        if (data.error === 'not-public') {
+          setLinkError('Share the Drive file as Anyone with the link (Viewer), then paste the link again.');
+          setDriveSrc(preview);
+          setDriveMode('iframe');
+          return;
+        }
+        setDriveSrc(`/api/drive-file?id=${encodeURIComponent(fileId)}`);
+        setDriveMode('file');
+      } catch {
+        if (cancelled) return;
+        setDriveSrc(preview);
+        setDriveMode('iframe');
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, [url]);
 
   useEffect(() => {
@@ -576,10 +609,7 @@ export default function App() {
     [detectedCaptions, captionTracks],
   );
 
-  const playerSrc = useMemo(
-    () => playableVideoUrl(url, driveUseApi),
-    [url, driveUseApi],
-  );
+  const playerSrc = driveMode === 'file' ? driveSrc : url;
 
   useEffect(() => {
     const next: Record<string, string> = {};
@@ -1017,7 +1047,21 @@ export default function App() {
         </div>
 
         <div className="bg-black rounded-2xl overflow-hidden shadow-xl aspect-video relative group">
-          {url ? (
+          {driveMode === 'loading' ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-300 px-8">
+              <Video className="w-10 h-10 text-stone-500" />
+              <p className="text-sm text-center">Opening Google Drive file…</p>
+            </div>
+          ) : driveMode === 'iframe' ? (
+            <iframe
+              src={driveSrc}
+              className="absolute inset-0 w-full h-full border-0"
+              allow="autoplay; fullscreen; encrypted-media"
+              allowFullScreen
+              referrerPolicy="no-referrer"
+              title="Google Drive video"
+            />
+          ) : url ? (
             <ReactPlayer
               ref={playerRef}
               src={playerSrc}
@@ -1031,12 +1075,11 @@ export default function App() {
                 setPlayerReadyTick((tick) => tick + 1);
               }}
               onError={() => {
-                if (parseDriveFileId(url) && !driveUseApi) {
-                  setDriveUseApi(true);
+                const fileId = parseDriveFileId(url);
+                if (fileId) {
+                  setDriveSrc(drivePreviewUrl(fileId));
+                  setDriveMode('iframe');
                   return;
-                }
-                if (parseDriveFileId(url)) {
-                  setLinkError('Drive could not stream this file. Share it as Anyone with the link and use an MP4.');
                 }
               }}
               onPlay={handlePlay}
@@ -1065,9 +1108,9 @@ export default function App() {
               </p>
             </div>
           )}
-          {isDriveUrl(url) ? (
+          {isDriveUrl(url) && driveMode !== 'loading' ? (
             <div className="absolute left-3 top-3 z-10 rounded-lg bg-black/60 px-2.5 py-1 text-xs text-white">
-              Google Drive
+              Google Drive{driveMode === 'iframe' ? ' player' : ''}
             </div>
           ) : null}
           {linkError && url ? (
@@ -1075,7 +1118,7 @@ export default function App() {
               {linkError}
             </div>
           ) : null}
-          {needsUnlock && url && (
+          {needsUnlock && url && driveMode !== 'iframe' && driveMode !== 'loading' && (
             <button
               type="button"
               onClick={() => {
@@ -1090,7 +1133,7 @@ export default function App() {
             </button>
           )}
         </div>
-        {url && isUploadedVideo(url) ? (
+        {url && isUploadedVideo(url) && driveMode !== 'iframe' && driveMode !== 'loading' ? (
           <MediaTrackBar
             url={url}
             isAdmin={isAdmin}

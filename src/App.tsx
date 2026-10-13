@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, SyntheticEvent } from 'react';
 import ReactPlayer from './lib/watchPlayer';
 import { io, Socket } from 'socket.io-client';
-import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon, Pencil, Shield, Cast } from 'lucide-react';
+import { Play, Link, Users, Video, Copy, Check, Upload, Trash2, List, X, Sun, Moon, Pencil, Shield } from 'lucide-react';
 import { initAuth, db, storage } from './lib/firebase';
 import { deleteField, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
@@ -29,10 +29,11 @@ import {
   type VoiceSession,
 } from './lib/voiceChat';
 import {
-  LOCAL_STREAM_URL,
-  startFileCast,
-  type FileCastSession,
-} from './lib/fileCast';
+  isDriveUrl,
+  parseDriveFileId,
+  playableVideoUrl,
+  resolveDriveLink,
+} from './lib/googleDrive';
 import {
   type CaptionTrack,
   type ExtraAudioTrack,
@@ -115,10 +116,9 @@ export default function App() {
   const [voiceMuted, setVoiceMuted] = useState(false);
   const [voiceJoining, setVoiceJoining] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [castTitle, setCastTitle] = useState('');
-  const [castError, setCastError] = useState<string | null>(null);
-  const [shareProgress, setShareProgress] = useState(0);
-  const [isCastHost, setIsCastHost] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkResolving, setLinkResolving] = useState(false);
+  const [driveUseApi, setDriveUseApi] = useState(false);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [detectedCaptions, setDetectedCaptions] = useState<CaptionTrack[]>([]);
   const [extraAudioTracks, setExtraAudioTracks] = useState<ExtraAudioTrack[]>([]);
@@ -136,7 +136,6 @@ export default function App() {
   const ignoreNextPlayPause = useRef(false);
   const ignoreSeekUntil = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const streamInputRef = useRef<HTMLInputElement>(null);
   const lastPlayedSeconds = useRef(0);
   const lastSyncSentAt = useRef(0);
   const pendingSync = useRef<{ time: number; playing: boolean } | null>(null);
@@ -144,9 +143,6 @@ export default function App() {
   const adminClaimedRef = useRef(false);
   const isBannedRef = useRef(false);
   const voiceSessionRef = useRef<VoiceSession | null>(null);
-  const fileCastRef = useRef<FileCastSession | null>(null);
-  const isCastHostRef = useRef(false);
-  const localBlobUrlRef = useRef('');
 
   playingRef.current = playing;
   urlRef.current = url;
@@ -205,18 +201,16 @@ export default function App() {
     }, 600);
   };
 
-  const writePlayback = async (patch: { playing?: boolean; time?: number; currentVideoUrl?: string; streamTitle?: string }) => {
+  const writePlayback = async (patch: { playing?: boolean; time?: number; currentVideoUrl?: string }) => {
     if (!uidRef.current || isBannedRef.current) return;
     try {
       await setDoc(doc(db, 'rooms', roomId), {
-        currentVideoUrl: patch.currentVideoUrl
-          ?? (isCastHostRef.current ? LOCAL_STREAM_URL : urlRef.current),
+        currentVideoUrl: patch.currentVideoUrl ?? urlRef.current,
         playing: patch.playing ?? playingRef.current,
         time: patch.time ?? lastPlayedSeconds.current,
         playbackUpdatedAt: Date.now(),
         playbackUpdatedBy: uidRef.current,
         updatedAt: new Date().toISOString(),
-        ...(patch.streamTitle !== undefined ? { streamTitle: patch.streamTitle } : {}),
       }, { merge: true });
     } catch (err) {
       console.error('Failed to write playback state', err);
@@ -261,13 +255,10 @@ export default function App() {
         const data = docSnap.data();
         const liveUid = getAuth().currentUser?.uid || uidRef.current;
         if (liveUid) uidRef.current = liveUid;
-        if (typeof data.currentVideoUrl === 'string') {
-          if (data.currentVideoUrl === LOCAL_STREAM_URL) {
-            if (!isCastHostRef.current && !localBlobUrlRef.current) setUrl(LOCAL_STREAM_URL);
-            if (typeof data.streamTitle === 'string') setCastTitle(data.streamTitle);
-          } else {
-            setUrl((prevUrl) => (prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl));
-          }
+        if (typeof data.currentVideoUrl === 'string'
+          && data.currentVideoUrl !== 'local-stream'
+          && !data.currentVideoUrl.startsWith('blob:')) {
+          setUrl((prevUrl) => (prevUrl !== data.currentVideoUrl ? data.currentVideoUrl : prevUrl));
         }
 
         const mediaKey = mediaKeyFromUrl(typeof data.currentVideoUrl === 'string' ? data.currentVideoUrl : urlRef.current);
@@ -491,58 +482,6 @@ export default function App() {
     voiceSessionRef.current?.setMuted(next);
   };
 
-  const stopLocalCast = () => {
-    fileCastRef.current?.destroy();
-    fileCastRef.current = null;
-    isCastHostRef.current = false;
-    setIsCastHost(false);
-    setShareProgress(0);
-    setCastError(null);
-    if (localBlobUrlRef.current) {
-      URL.revokeObjectURL(localBlobUrlRef.current);
-      localBlobUrlRef.current = '';
-    }
-    setCastTitle('');
-  };
-
-  useEffect(() => {
-    if (!uid || !isAuthReady || isBanned || isCastHost || url !== LOCAL_STREAM_URL || localBlobUrlRef.current) return;
-    const session = startFileCast({
-      roomId,
-      uid,
-      name: displayNameRef.current,
-      role: 'guest',
-      onProgress: setShareProgress,
-      onRemoteFile: (blob, name) => {
-        if (localBlobUrlRef.current) URL.revokeObjectURL(localBlobUrlRef.current);
-        const blobUrl = URL.createObjectURL(blob);
-        localBlobUrlRef.current = blobUrl;
-        setCastTitle(name);
-        setUrl(blobUrl);
-        setShareProgress(1);
-      },
-      onError: setCastError,
-    });
-    fileCastRef.current = session;
-    void session.join();
-    return () => {
-      session.destroy();
-      if (fileCastRef.current === session) fileCastRef.current = null;
-    };
-  }, [uid, roomId, isAuthReady, isBanned, isCastHost, url]);
-
-  useEffect(() => {
-    if (!isBanned) return;
-    fileCastRef.current?.destroy();
-    fileCastRef.current = null;
-  }, [isBanned]);
-
-  useEffect(() => () => {
-    fileCastRef.current?.destroy();
-    fileCastRef.current = null;
-    if (localBlobUrlRef.current) URL.revokeObjectURL(localBlobUrlRef.current);
-  }, [roomId]);
-
   const handlePlay = () => {
     setNeedsUnlock(false);
     if (ignoreNextPlayPause.current) {
@@ -604,7 +543,8 @@ export default function App() {
 
   const updateRoomState = async (newUrl: string) => {
     if (!isAdmin) return;
-    if (newUrl !== LOCAL_STREAM_URL) stopLocalCast();
+    setLinkError(null);
+    setDriveUseApi(false);
     setUrl(newUrl);
     setPlaying(false);
     lastPlayedSeconds.current = 0;
@@ -613,10 +553,15 @@ export default function App() {
   };
 
   useEffect(() => {
+    setDriveUseApi(false);
+    setLinkError(null);
+  }, [url]);
+
+  useEffect(() => {
     setSelectedCaptionId('');
     setSelectedAudioId('default');
     setDetectedCaptions([]);
-    if (!url || !isUploadedVideo(url)) return;
+    if (!url || !isUploadedVideo(url) || isDriveUrl(url)) return;
     let cancelled = false;
     probeSidecarCaptions(url).then((rows) => {
       if (!cancelled) setDetectedCaptions(rows);
@@ -629,6 +574,11 @@ export default function App() {
   const playableCaptions = useMemo(
     () => [...detectedCaptions, ...captionTracks],
     [detectedCaptions, captionTracks],
+  );
+
+  const playerSrc = useMemo(
+    () => playableVideoUrl(url, driveUseApi),
+    [url, driveUseApi],
   );
 
   useEffect(() => {
@@ -757,53 +707,28 @@ export default function App() {
 
   const handleUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin) return;
-    if (inputUrl.trim()) {
-      updateRoomState(inputUrl.trim());
+    if (!isAdmin || linkResolving) return;
+    const raw = inputUrl.trim();
+    if (!raw) return;
+    const load = async () => {
+      setLinkError(null);
+      if (parseDriveFileId(raw)) {
+        setLinkResolving(true);
+        try {
+          const resolved = await resolveDriveLink(raw);
+          await updateRoomState(resolved.url);
+          setInputUrl('');
+        } catch (err) {
+          setLinkError(err instanceof Error ? err.message : 'Could not open this Drive file.');
+        } finally {
+          setLinkResolving(false);
+        }
+        return;
+      }
+      await updateRoomState(raw);
       setInputUrl('');
-    }
-  };
-
-  const handleLocalStreamFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isAdmin) {
-      e.target.value = '';
-      return;
-    }
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (!file.type.startsWith('video/')) {
-      alert('Please choose a video file.');
-      return;
-    }
-    stopLocalCast();
-    const blobUrl = URL.createObjectURL(file);
-    isCastHostRef.current = true;
-    setIsCastHost(true);
-    localBlobUrlRef.current = blobUrl;
-    setCastTitle(file.name);
-    setCastError(null);
-    setShareProgress(0);
-    setUrl(blobUrl);
-    setPlaying(true);
-    lastPlayedSeconds.current = 0;
-    socketRef.current?.emit('videoStateUpdate', { roomId, state: { url: LOCAL_STREAM_URL } });
-    void writePlayback({ currentVideoUrl: LOCAL_STREAM_URL, playing: true, time: 0, streamTitle: file.name });
-    if (!uidRef.current) {
-      setCastError('Wait until Connected, then share the file again.');
-      return;
-    }
-    const session = startFileCast({
-      roomId,
-      uid: uidRef.current,
-      name: displayNameRef.current,
-      role: 'host',
-      file,
-      onProgress: setShareProgress,
-      onError: setCastError,
-    });
-    fileCastRef.current = session;
-    void session.join();
+    };
+    void load();
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1014,16 +939,16 @@ export default function App() {
                             type="url"
                             value={inputUrl}
                             onChange={(e) => setInputUrl(e.target.value)}
-                            placeholder="Paste YouTube, Vimeo, or Video URL here..."
+                            placeholder="Paste YouTube, Vimeo, Google Drive, or video URL..."
                             className="block w-full pl-10 pr-4 py-3 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow text-stone-800 dark:text-stone-100 dark:placeholder-stone-500"
                         />
                     </div>
                     <button
                         type="submit"
-                        disabled={!isAuthReady}
+                        disabled={!isAuthReady || linkResolving}
                         className="bg-stone-900 hover:bg-stone-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap h-full disabled:opacity-50"
                     >
-                        Load Video
+                        {linkResolving ? 'Opening…' : 'Load Video'}
                     </button>
                 </form>
 
@@ -1047,23 +972,6 @@ export default function App() {
                         >
                             <Upload className="w-5 h-5" />
                             {isUploading ? `Uploading ${uploadProgress}%` : 'Upload Video'}
-                        </button>
-                        <input
-                            type="file"
-                            accept="video/*"
-                            className="hidden"
-                            ref={streamInputRef}
-                            onChange={handleLocalStreamFile}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => streamInputRef.current?.click()}
-                            disabled={!isAuthReady}
-                            title="Copy this file to others in the room, then play in sync. Nothing is uploaded to the server."
-                            className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-200 font-medium py-3 px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap disabled:opacity-50 h-full"
-                        >
-                            <Cast className="w-5 h-5" />
-                            Stream file
                         </button>
                         <button
                             type="button"
@@ -1089,34 +997,30 @@ export default function App() {
                             <div className="bg-indigo-600 dark:bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
                         </div>
                     )}
+                    {linkError ? (
+                        <p className="w-full text-sm text-rose-600 dark:text-rose-400">{linkError}</p>
+                    ) : (
+                        <p className="w-full text-xs text-stone-400 dark:text-stone-500">
+                            Google Drive: share the file as Anyone with the link (Viewer), then paste the link.
+                        </p>
+                    )}
                 </div>
             </div>
             ) : (
               <div className="flex items-center gap-3 text-stone-600 dark:text-stone-400">
                 <Shield className="w-5 h-5 text-indigo-500 shrink-0" />
                 <p className="text-sm">
-                  {url === LOCAL_STREAM_URL
-                    ? `Receiving ${castTitle || 'the file'} from the admin…`
-                    : 'Only the room admin can paste a link, upload, or share a local file. You can watch and chat.'}
+                  Only the room admin can paste a link or upload. You can watch and chat.
                 </p>
               </div>
             )}
         </div>
 
         <div className="bg-black rounded-2xl overflow-hidden shadow-xl aspect-video relative group">
-          {url === LOCAL_STREAM_URL && !isCastHost ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-300 px-8">
-              <Cast className="w-10 h-10 text-stone-500" />
-              <p className="text-sm text-center">{castError || `Receiving ${castTitle || 'file'} onto this device…`}</p>
-              <div className="w-full max-w-xs h-1.5 bg-stone-800 rounded-full overflow-hidden">
-                <div className="h-full bg-indigo-500 transition-all" style={{ width: `${Math.round(shareProgress * 100)}%` }} />
-              </div>
-              <p className="text-xs text-stone-500 tabular-nums">{Math.round(shareProgress * 100)}%</p>
-            </div>
-          ) : url ? (
+          {url ? (
             <ReactPlayer
               ref={playerRef}
-              src={url}
+              src={playerSrc}
               width="100%"
               height="100%"
               playing={playing}
@@ -1125,6 +1029,15 @@ export default function App() {
               onReady={() => {
                 applyPendingSync();
                 setPlayerReadyTick((tick) => tick + 1);
+              }}
+              onError={() => {
+                if (parseDriveFileId(url) && !driveUseApi) {
+                  setDriveUseApi(true);
+                  return;
+                }
+                if (parseDriveFileId(url)) {
+                  setLinkError('Drive could not stream this file. Share it as Anyone with the link and use an MP4.');
+                }
               }}
               onPlay={handlePlay}
               onPause={handlePause}
@@ -1148,22 +1061,18 @@ export default function App() {
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-400">
               <Video className="w-12 h-12 text-stone-600" />
               <p className="text-sm">
-                {isAdmin ? 'Paste a URL, upload, or share a file from this computer.' : 'Waiting for the admin to add a video.'}
+                {isAdmin ? 'Paste a YouTube, Vimeo, Google Drive, or video URL — or upload a file.' : 'Waiting for the admin to add a video.'}
               </p>
             </div>
           )}
-          {(isCastHost || url === LOCAL_STREAM_URL) && (
-            <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg bg-black/60 px-2.5 py-1 text-xs text-white">
-              <Cast className="w-3.5 h-3.5" />
-              <span className="max-w-[14rem] truncate">{castTitle || 'Shared file'}</span>
-              {shareProgress > 0 && shareProgress < 1 ? (
-                <span className="tabular-nums">{Math.round(shareProgress * 100)}%</span>
-              ) : null}
+          {isDriveUrl(url) ? (
+            <div className="absolute left-3 top-3 z-10 rounded-lg bg-black/60 px-2.5 py-1 text-xs text-white">
+              Google Drive
             </div>
-          )}
-          {castError ? (
-            <div className="absolute right-3 top-3 z-10 rounded-lg bg-rose-600/90 px-2.5 py-1 text-xs text-white max-w-[16rem] truncate">
-              {castError}
+          ) : null}
+          {linkError && url ? (
+            <div className="absolute left-3 right-3 bottom-3 z-10 rounded-lg bg-rose-600/90 px-2.5 py-1.5 text-xs text-white">
+              {linkError}
             </div>
           ) : null}
           {needsUnlock && url && (
@@ -1205,9 +1114,7 @@ export default function App() {
                 <div>
                     <h3 className="font-semibold text-indigo-900 dark:text-indigo-300">Room: {roomId}</h3>
                     <p className="text-indigo-700 dark:text-indigo-400/80 text-sm mt-1 max-w-xl">
-                        {url === LOCAL_STREAM_URL || isCastHost
-                          ? `Sharing a file${castTitle ? `: ${castTitle}` : ''}. Others play a local copy in sync.`
-                          : isAdmin
+                        {isAdmin
                             ? 'You are the admin. Open People to grant admin or ban someone.'
                             : 'Share this page with a friend. Play, pause, and seek stay in sync.'}
                         {' '}{userCount} online

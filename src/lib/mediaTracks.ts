@@ -1,3 +1,5 @@
+import { parseDriveFileId } from './googleDrive';
+
 export type CaptionTrack = {
   id: string;
   label: string;
@@ -15,11 +17,14 @@ export type ExtraAudioTrack = {
 };
 
 export function isUploadedVideo(url: string): boolean {
-  if (!url || url === 'local-stream' || url.startsWith('blob:')) return false;
+  if (!url || url.startsWith('blob:')) return false;
+  if (parseDriveFileId(url)) return true;
   return !/youtube\.com|youtu\.be|vimeo\.com|wistia\.com/i.test(url);
 }
 
 export function mediaKeyFromUrl(url: string): string {
+  const driveId = parseDriveFileId(url);
+  if (driveId) return `drive_${driveId}`;
   try {
     const path = decodeURIComponent(new URL(url).pathname);
     const marker = '/o/';

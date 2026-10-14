@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createVisitorStore, getClientIp } from './visitor-log';
-import { openDriveFile, resolveDriveMediaUrl } from './src/lib/resolveDriveMedia';
+import { openDriveFile, resolveDriveMediaUrl } from './api/_lib/driveMedia.js';
 
 type RoomPlayback = {
   url?: string;

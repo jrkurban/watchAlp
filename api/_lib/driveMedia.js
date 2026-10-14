@@ -2,26 +2,20 @@ const FILE_ID_RE = /^[\w-]{10,128}$/;
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const MAX_PROXY_CHUNK = 4 * 1024 * 1024;
 
-export function clampDriveRange(range?: string): string {
+export function clampDriveRange(range) {
   const match = range?.match(/bytes=(\d+)-(\d*)/);
   const start = match ? Number(match[1]) : 0;
   const requestedEnd = match && match[2] ? Number(match[2]) : undefined;
   const capEnd = start + MAX_PROXY_CHUNK - 1;
-  const end = Number.isFinite(requestedEnd) ? Math.min(requestedEnd as number, capEnd) : capEnd;
+  const end = Number.isFinite(requestedEnd) ? Math.min(requestedEnd, capEnd) : capEnd;
   return `bytes=${start}-${end}`;
 }
 
-export type DriveMediaResult = {
-  url: string;
-  kind: 'media' | 'preview';
-  error?: 'not-public' | 'not-video';
-};
-
-export function drivePreviewUrl(fileId: string): string {
+export function drivePreviewUrl(fileId) {
   return `https://drive.google.com/file/d/${fileId}/preview`;
 }
 
-function isMediaType(ctype: string): boolean {
+function isMediaType(ctype) {
   const value = ctype.toLowerCase();
   return value.startsWith('video/')
     || value.startsWith('audio/')
@@ -29,7 +23,7 @@ function isMediaType(ctype: string): boolean {
     || value.includes('mp4');
 }
 
-function pick(html: string, ...patterns: RegExp[]): string {
+function pick(html, ...patterns) {
   for (const pattern of patterns) {
     const match = html.match(pattern);
     if (match?.[1]) return match[1];
@@ -37,7 +31,7 @@ function pick(html: string, ...patterns: RegExp[]): string {
   return '';
 }
 
-function buildDownloadUrl(fileId: string, confirm?: string, uuid?: string, at?: string): string {
+function buildDownloadUrl(fileId, confirm, uuid, at) {
   const params = new URLSearchParams({
     id: fileId,
     export: 'download',
@@ -48,7 +42,7 @@ function buildDownloadUrl(fileId: string, confirm?: string, uuid?: string, at?: 
   return `https://drive.usercontent.google.com/download?${params.toString()}`;
 }
 
-function cookieHeader(res: Response): string {
+function cookieHeader(res) {
   const cookies = typeof res.headers.getSetCookie === 'function'
     ? res.headers.getSetCookie()
     : [];
@@ -59,8 +53,8 @@ function cookieHeader(res: Response): string {
   return single ? single.split(';')[0] : '';
 }
 
-async function probe(url: string, cookie = ''): Promise<{ res: Response; ctype: string }> {
-  const headers: Record<string, string> = {
+async function probe(url, cookie = '') {
+  const headers = {
     'User-Agent': UA,
     Accept: '*/*',
     Range: 'bytes=0-2047',
@@ -75,7 +69,7 @@ async function probe(url: string, cookie = ''): Promise<{ res: Response; ctype: 
   return { res, ctype };
 }
 
-async function dropBody(res: Response) {
+async function dropBody(res) {
   try {
     await res.body?.cancel();
   } catch {
@@ -83,18 +77,18 @@ async function dropBody(res: Response) {
   }
 }
 
-export async function openDriveFile(fileId: string, range?: string): Promise<Response> {
+export async function openDriveFile(fileId, range) {
   if (!FILE_ID_RE.test(fileId)) {
     throw new Error('Invalid Drive file id');
   }
 
-  const headers: Record<string, string> = {
+  const headers = {
     'User-Agent': UA,
     Accept: '*/*',
     Range: clampDriveRange(range),
   };
 
-  const request = (url: string, cookie = '') => {
+  const request = (url, cookie = '') => {
     const next = { ...headers };
     if (cookie) next.Cookie = cookie;
     return fetch(url, { headers: next, redirect: 'follow' });
@@ -117,7 +111,7 @@ export async function openDriveFile(fileId: string, range?: string): Promise<Res
   return res;
 }
 
-export async function resolveDriveMediaUrl(fileId: string): Promise<DriveMediaResult> {
+export async function resolveDriveMediaUrl(fileId) {
   if (!FILE_ID_RE.test(fileId)) {
     throw new Error('Invalid Drive file id');
   }

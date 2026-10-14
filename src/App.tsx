@@ -29,10 +29,10 @@ import {
   type VoiceSession,
 } from './lib/voiceChat';
 import {
+  canonicalDriveUrl,
   drivePreviewUrl,
   isDriveUrl,
   parseDriveFileId,
-  resolveDriveLink,
 } from './lib/googleDrive';
 import {
   type CaptionTrack,
@@ -117,7 +117,6 @@ export default function App() {
   const [voiceJoining, setVoiceJoining] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
-  const [linkResolving, setLinkResolving] = useState(false);
   const [driveMode, setDriveMode] = useState<'off' | 'loading' | 'file' | 'iframe'>('off');
   const [driveSrc, setDriveSrc] = useState('');
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
@@ -736,28 +735,12 @@ export default function App() {
 
   const handleUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin || linkResolving) return;
+    if (!isAdmin) return;
     const raw = inputUrl.trim();
     if (!raw) return;
-    const load = async () => {
-      setLinkError(null);
-      if (parseDriveFileId(raw)) {
-        setLinkResolving(true);
-        try {
-          const resolved = await resolveDriveLink(raw);
-          await updateRoomState(resolved.url);
-          setInputUrl('');
-        } catch (err) {
-          setLinkError(err instanceof Error ? err.message : 'Could not open this Drive file.');
-        } finally {
-          setLinkResolving(false);
-        }
-        return;
-      }
-      await updateRoomState(raw);
-      setInputUrl('');
-    };
-    void load();
+    const fileId = parseDriveFileId(raw);
+    void updateRoomState(fileId ? canonicalDriveUrl(fileId) : raw);
+    setInputUrl('');
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -968,7 +951,10 @@ export default function App() {
                             <Link className="h-5 w-5" />
                         </div>
                         <input
-                            type="url"
+                            type="text"
+                            inputMode="url"
+                            autoCapitalize="none"
+                            autoCorrect="off"
                             value={inputUrl}
                             onChange={(e) => setInputUrl(e.target.value)}
                             placeholder="YouTube, Drive, or video URL"
@@ -977,10 +963,10 @@ export default function App() {
                     </div>
                     <button
                         type="submit"
-                        disabled={!isAuthReady || linkResolving}
+                        disabled={!isAuthReady}
                         className="min-h-11 bg-stone-900 hover:bg-stone-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white font-medium py-3 px-4 sm:px-6 rounded-xl transition-colors shadow-sm whitespace-nowrap h-full disabled:opacity-50"
                     >
-                        {linkResolving ? 'Opening…' : 'Load'}
+                        Load
                     </button>
                 </form>
 
@@ -1079,7 +1065,7 @@ export default function App() {
               }}
               onError={() => {
                 if (parseDriveFileId(url)) {
-                  setLinkError('Could not play this Drive file. Share it as Anyone with the link, then tap Load again.');
+                  setLinkError('Could not play this Drive file. Tap Load again. If Drive still asks for access, share it as Anyone with the link.');
                 }
               }}
               onPlay={handlePlay}

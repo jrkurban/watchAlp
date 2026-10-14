@@ -1,7 +1,11 @@
 {
   "functions": {
     "api/drive-file.ts": {
+      "includeFiles": "api/_lib/**",
       "maxDuration": 60
+    },
+    "api/drive-url.ts": {
+      "includeFiles": "api/_lib/**"
     }
   },
   "rewrites": [

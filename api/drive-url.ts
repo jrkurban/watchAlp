@@ -1,4 +1,4 @@
-import { resolveDriveMediaUrl } from '../src/lib/resolveDriveMedia';
+import { resolveDriveMediaUrl } from './_lib/driveMedia.js';
 
 type VercelReq = { method?: string; query?: { id?: string | string[] } };
 type VercelRes = {

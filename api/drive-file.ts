@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
-import { openDriveFile } from '../src/lib/resolveDriveMedia';
+import { openDriveFile } from './_lib/driveMedia.js';
 
-export const config = { maxDuration: 300 };
+export const config = { maxDuration: 60 };
 
 type VercelReq = { method?: string; query?: { id?: string | string[] }; headers: Record<string, string | string[] | undefined> };
 type VercelRes = {

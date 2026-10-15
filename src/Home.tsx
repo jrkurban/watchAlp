@@ -121,7 +121,7 @@ export default function Home() {
           </li>
           <li className="flex gap-3">
             <Video className="w-5 h-5 text-indigo-600 shrink-0" />
-            <span>Sadece oda admini link ve video yükler</span>
+            <span>Ekran paylaş, sesli konuş, link veya video yükle</span>
           </li>
         </ul>
       </main>

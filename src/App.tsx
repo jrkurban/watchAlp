@@ -10,6 +10,7 @@ import { Chat } from './components/Chat';
 import { MediaTrackBar } from './components/MediaTrackBar';
 import { RoomMembers } from './components/RoomMembers';
 import { VoiceBar } from './components/VoiceBar';
+import { ScreenShareBar } from './components/ScreenShareBar';
 import { startVisitorSession } from './lib/visitorSession';
 import { getStoredUsername, saveUsername, USERNAME_MAX } from './lib/identity';
 import {
@@ -28,6 +29,11 @@ import {
   type VoiceMember,
   type VoiceSession,
 } from './lib/voiceChat';
+import {
+  startScreenShareSession,
+  type ScreenShareInfo,
+  type ScreenShareSession,
+} from './lib/screenShare';
 import {
   canonicalDriveUrl,
   drivePreviewUrl,
@@ -116,6 +122,12 @@ export default function App() {
   const [voiceMuted, setVoiceMuted] = useState(false);
   const [voiceJoining, setVoiceJoining] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [screenPresenter, setScreenPresenter] = useState<ScreenShareInfo>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [isPresenting, setIsPresenting] = useState(false);
+  const [screenStarting, setScreenStarting] = useState(false);
+  const [screenError, setScreenError] = useState<string | null>(null);
+  const [screenNeedsUnlock, setScreenNeedsUnlock] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [driveMode, setDriveMode] = useState<'off' | 'loading' | 'file' | 'iframe'>('off');
   const [driveSrc, setDriveSrc] = useState('');
@@ -143,6 +155,8 @@ export default function App() {
   const adminClaimedRef = useRef(false);
   const isBannedRef = useRef(false);
   const voiceSessionRef = useRef<VoiceSession | null>(null);
+  const screenSessionRef = useRef<ScreenShareSession | null>(null);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
 
   playingRef.current = playing;
   urlRef.current = url;
@@ -432,12 +446,59 @@ export default function App() {
     setInVoice(false);
     setVoiceJoining(false);
     setVoiceMuted(false);
+    screenSessionRef.current?.destroy();
+    screenSessionRef.current = null;
+    setIsPresenting(false);
+    setScreenStream(null);
+    setScreenPresenter(null);
   }, [isBanned, uid]);
 
   useEffect(() => () => {
     voiceSessionRef.current?.destroy();
     voiceSessionRef.current = null;
+    screenSessionRef.current?.destroy();
+    screenSessionRef.current = null;
   }, [roomId]);
+
+  useEffect(() => {
+    if (!uid || !isAuthReady || isBanned) return;
+    const session = startScreenShareSession({
+      roomId,
+      uid,
+      name: displayNameRef.current,
+      onPresenter: setScreenPresenter,
+      onLocalStream: (stream) => {
+        setScreenStream(stream);
+        setIsPresenting(Boolean(stream));
+        if (!stream) setScreenNeedsUnlock(false);
+      },
+      onRemoteStream: (stream) => {
+        setScreenStream(stream);
+        if (stream) setIsPresenting(false);
+        if (!stream) setScreenNeedsUnlock(false);
+      },
+      onError: setScreenError,
+    });
+    screenSessionRef.current = session;
+    session.watch();
+    return () => {
+      session.destroy();
+      if (screenSessionRef.current === session) screenSessionRef.current = null;
+    };
+  }, [uid, roomId, isAuthReady, isBanned]);
+
+  useEffect(() => {
+    screenSessionRef.current?.setName(displayName);
+  }, [displayName]);
+
+  useEffect(() => {
+    const el = screenVideoRef.current;
+    if (!el) return;
+    el.srcObject = screenStream;
+    if (!screenStream) return;
+    el.muted = isPresenting;
+    void el.play().catch(() => setScreenNeedsUnlock(true));
+  }, [screenStream, isPresenting]);
 
   const joinVoice = async () => {
     if (!uid || isBanned || inVoice || voiceJoining) return;
@@ -480,6 +541,21 @@ export default function App() {
     const next = !voiceMuted;
     setVoiceMuted(next);
     voiceSessionRef.current?.setMuted(next);
+  };
+
+  const startScreenShare = async () => {
+    if (!uid || isBanned || isPresenting || screenStarting) return;
+    setScreenError(null);
+    setScreenStarting(true);
+    const ok = await screenSessionRef.current?.start();
+    setScreenStarting(false);
+    if (!ok) setIsPresenting(false);
+  };
+
+  const stopScreenShare = () => {
+    screenSessionRef.current?.stop();
+    setIsPresenting(false);
+    setScreenStarting(false);
   };
 
   const handlePlay = () => {
@@ -912,6 +988,15 @@ export default function App() {
               onLeave={leaveVoice}
               onToggleMute={toggleVoiceMute}
             />
+            <ScreenShareBar
+              presenting={isPresenting}
+              presenter={screenPresenter}
+              starting={screenStarting}
+              error={screenError}
+              disabled={isBanned || !isAuthReady || !uid}
+              onStart={() => { void startScreenShare(); }}
+              onStop={stopScreenShare}
+            />
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
               className="min-h-11 min-w-11 p-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 rounded-lg transition-colors"
@@ -1035,7 +1120,49 @@ export default function App() {
         </div>
 
         <div className="bg-black rounded-2xl overflow-hidden shadow-xl aspect-video relative group">
-          {driveMode === 'loading' ? (
+          {screenStream || screenPresenter ? (
+            <>
+              {screenStream ? (
+                <video
+                  ref={screenVideoRef}
+                  className="absolute inset-0 w-full h-full object-contain bg-black"
+                  autoPlay
+                  playsInline
+                  muted={isPresenting}
+                />
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-300 px-8">
+                  <Video className="w-10 h-10 text-stone-500" />
+                  <p className="text-sm text-center">Connecting to screen share…</p>
+                </div>
+              )}
+              <div className="absolute left-3 top-3 z-10 rounded-lg bg-black/60 px-2.5 py-1 text-xs text-white">
+                {isPresenting ? 'You are sharing' : `Screen · ${screenPresenter?.name || 'Guest'}`}
+              </div>
+              {isPresenting ? (
+                <button
+                  type="button"
+                  onClick={stopScreenShare}
+                  className="absolute right-3 top-3 z-10 rounded-lg bg-rose-600/90 hover:bg-rose-600 px-2.5 py-1 text-xs text-white"
+                >
+                  Stop sharing
+                </button>
+              ) : null}
+              {screenNeedsUnlock && screenStream && !isPresenting ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScreenNeedsUnlock(false);
+                    void screenVideoRef.current?.play();
+                  }}
+                  className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/70 text-white"
+                >
+                  <Play className="w-12 h-12" />
+                  <span className="text-sm font-medium">Tap to watch screen share</span>
+                </button>
+              ) : null}
+            </>
+          ) : driveMode === 'loading' ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-stone-300 px-8">
               <Video className="w-10 h-10 text-stone-500" />
               <p className="text-sm text-center">Opening Google Drive file…</p>
@@ -1094,7 +1221,7 @@ export default function App() {
               </p>
             </div>
           )}
-          {isDriveUrl(url) && driveMode !== 'loading' ? (
+          {isDriveUrl(url) && driveMode !== 'loading' && !screenStream && !screenPresenter ? (
             <div className="absolute left-3 top-3 z-10 rounded-lg bg-black/60 px-2.5 py-1 text-xs text-white">
               Google Drive{driveMode === 'iframe' ? ' player' : ''}
             </div>
@@ -1104,7 +1231,7 @@ export default function App() {
               {linkError}
             </div>
           ) : null}
-          {needsUnlock && url && driveMode !== 'iframe' && driveMode !== 'loading' && (
+          {needsUnlock && url && driveMode !== 'iframe' && driveMode !== 'loading' && !screenStream && !screenPresenter && (
             <button
               type="button"
               onClick={() => {
@@ -1119,7 +1246,7 @@ export default function App() {
             </button>
           )}
         </div>
-        {url && isUploadedVideo(url) && driveMode !== 'iframe' && driveMode !== 'loading' ? (
+        {url && isUploadedVideo(url) && driveMode !== 'iframe' && driveMode !== 'loading' && !screenStream && !screenPresenter ? (
           <MediaTrackBar
             url={url}
             isAdmin={isAdmin}
